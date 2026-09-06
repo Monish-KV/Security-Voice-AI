@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#08121e">
+    <title>VoiceShield AI · Deepfake Detection</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230e1d2b'/%3E%3Cpath d='M9 20V12m7 12V8m7 12v-8' stroke='%235ee7d2' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <header class="topbar shell">
+      <a class="brand" href="/">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span>VoiceShield <em>AI</em></span>
+      </a>
+      <div class="topbar-status"><span class="status-dot"></span> Analysis console <span class="divider"></span> v1.0 MVP</div>
+    </header>
+
+    <main class="shell">
+      <section class="hero">
+        <div class="eyebrow"><span class="eyebrow-line"></span> AUDIO INTEGRITY LAB</div>
+        <h1>Is the voice <span>really human?</span></h1>
+        <p class="hero-copy">Upload a recording to screen for synthetic voice artifacts with two independent deepfake detection models.</p>
+      </section>
+
+      <section class="workspace">
+        <form id="analysis-form" class="upload-card">
+          <div class="card-heading">
+            <div>
+              <p class="section-label">01 / SOURCE AUDIO</p>
+              <h2>Drop a recording to begin</h2>
+            </div>
+            <span class="file-limit">MAX 50 MB</span>
+          </div>
+          <label id="drop-zone" class="drop-zone" for="audio-file">
+            <input id="audio-file" name="audio" type="file" accept="audio/*,.m4a,.mp3,.wav,.ogg,.flac">
+            <span class="upload-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v3.5A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5V14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <strong id="drop-title">Choose an audio file</strong>
+            <span id="drop-subtitle">Drag and drop or browse from your device</span>
+            <span class="format-list">WAV &nbsp;·&nbsp; MP3 &nbsp;·&nbsp; M4A &nbsp;·&nbsp; OGG &nbsp;·&nbsp; FLAC</span>
+          </label>
+          <div id="selected-file" class="selected-file hidden">
+            <span class="audio-file-icon">♪</span>
+            <div class="selected-file-info"><strong id="selected-name"></strong><span id="selected-meta"></span></div>
+            <button id="clear-file" type="button" aria-label="Remove selected file">×</button>
+          </div>
+          <button id="analyze-button" class="primary-button" type="submit" disabled>
+            <span class="button-label">Analyze recording <span>→</span></span>
+            <span class="button-loading hidden"><span class="spinner"></span> Running models…</span>
+          </button>
+          <p class="privacy-note"><span aria-hidden="true">⌁</span> Audio is processed for this analysis and is not stored.</p>
+        </form>
+
+        <aside class="method-card">
+          <p class="section-label">02 / DETECTION METHOD</p>
+          <h2>Two models.<br><span>One clearer signal.</span></h2>
+          <p class="method-copy">VoiceShield compares independent V2 and V4 TensorFlow models, then combines their outputs to produce an ensemble risk score.</p>
+          <div class="model-list">
+            <div class="model-row"><span class="model-badge">V2</span><div><strong>Audio Deepfake V2</strong><small>Independent classifier</small></div><span class="model-state" data-model="v2">●</span></div>
+            <div class="model-row"><span class="model-badge">V4</span><div><strong>Audio Deepfake V4</strong><small>Independent classifier</small></div><span class="model-state" data-model="v4">●</span></div>
+          </div>
+          <div class="method-foot"><span class="pulse-dot"></span><span id="system-status">Checking model status…</span></div>
+        </aside>
+      </section>
+
+      <section id="error-panel" class="message-panel error-panel hidden" role="alert"></section>
+
+      <section id="results" class="results hidden">
+        <div class="results-header">
+          <div><p class="section-label">03 / ANALYSIS RESULT</p><h2>Recording assessment</h2></div>
+          <div id="risk-pill" class="risk-pill"><span class="risk-dot"></span><span id="risk-label">—</span></div>
+        </div>
+        <div class="result-grid">
+          <div class="score-card main-score"><span class="score-label">ENSEMBLE RISK SCORE</span><div class="score-value"><strong id="ensemble-score">—</strong><span>/ 100</span></div><div class="score-meter"><span id="score-meter-fill"></span></div><p id="risk-description">Application risk classification</p></div>
+          <div class="metric-card"><span class="score-label">MODEL OUTPUTS</span><div class="model-metric"><span>V2 prediction</span><strong id="v2-score">—</strong></div><div class="model-metric"><span>V4 prediction</span><strong id="v4-score">—</strong></div></div>
+          <div class="metric-card"><span class="score-label">RECORDING DETAILS</span><div class="detail-line"><span>File</span><strong id="result-filename">—</strong></div><div class="detail-line"><span>Duration</span><strong id="result-duration">—</strong></div><div class="detail-line"><span>Processing</span><strong id="result-time">—</strong></div></div>
+        </div>
+        <div class="model-statement"><span class="verified-check">✓</span><span id="model-statement">Prediction generated by trained V2 + V4 TensorFlow/Keras models.</span></div>
+      </section>
+
+      <footer><span>VOICESHIELD AI</span><span>UPLOADED RECORDING ANALYSIS · NOT REAL-TIME CALL DETECTION</span></footer>
+    </main>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  </body>
+</html>
