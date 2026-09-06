@@ -5,6 +5,7 @@ const state = { health: null, result: null, incidents: [], events: [], mediaReco
 const pageMeta = {
   dashboard: ["OVERVIEW", "Command center"],
   analysis: ["VOICE INTEGRITY", "Analyze a recording"],
+  transaction: ["SECURITY OPERATIONS", "Transaction protection"],
   live: ["PROTOTYPE MODE", "Near-real-time analysis"],
   incidents: ["CASE MANAGEMENT", "Incident center"],
   audit: ["GOVERNANCE", "Audit trail"],
@@ -191,7 +192,35 @@ function renderResult(result) {
   $("#risk-pill").style.color = riskColor;
   $("#recommended-action").textContent = result.security.recommended_action;
   $("#recommendation").textContent = result.security.recommendation;
-  $("#why-flagged").textContent = result.security.reasons.join(" · ");
+  const context = result.context || {};
+  const signals = Array.isArray(context.social_signals) ? context.social_signals : [];
+  const modelEvidence = [
+    `V2 deepfake score: ${v2.toFixed(1)}/100`,
+    `V4 deepfake score: ${v4.toFixed(1)}/100`,
+    `Ensemble model score: ${model.toFixed(1)}/100`,
+  ];
+  const contextEvidence = [
+    `Caller: ${context.caller_type === "UNKNOWN" ? "Unknown" : "Known"}`,
+    `Interaction: ${context.first_time_caller ? "First-time caller" : "Previous interaction"}`,
+    `Request: ${context.sensitive_request ? "Sensitive request" : "Normal request"}${context.requested_action && context.requested_action !== "OTHER" ? ` (${context.requested_action})` : ""}`,
+    `Transaction: ${context.high_value_transaction ? "High-value transaction" : "Normal value"}`,
+    `History: ${context.previous_high_risk ? "Previous high-risk interaction" : "No previous high-risk interaction"}`,
+  ];
+  const socialLabels = {
+    urgent_payment: "Urgent payment request",
+    credential_request: "Credential request",
+    secrecy_request: "Secrecy / pressure",
+    authority_claim: "Authority claim",
+    bypass_verification: "Verification bypass",
+    change_payment_details: "Payment-detail change",
+  };
+  const socialEvidence = signals.map((signal) => socialLabels[signal] || signal).filter(Boolean);
+  const renderEvidence = (selector, items, emptyText) => {
+    $(selector).innerHTML = (items.length ? items : [emptyText]).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  };
+  renderEvidence("#model-evidence", modelEvidence, "No model evidence available.");
+  renderEvidence("#context-evidence", contextEvidence, "No context signals selected.");
+  renderEvidence("#social-evidence", socialEvidence, "No social-engineering indicators selected.");
   $("#model-statement").textContent = result.model_statement;
   renderTimeline(result.timeline);
   $("#result-panel").classList.remove("hidden");
@@ -266,6 +295,14 @@ async function loadIncidents() {
     const open = state.incidents.filter((incident) => incident.status !== "RESOLVED").length;
     $("#incident-count").textContent = `${open} OPEN`;
     $("#incidents-table").innerHTML = state.incidents.map((incident) => `<tr data-incident="${incident.incident_id}"><td>${incident.incident_id}</td><td>${formatTime(incident.timestamp)}</td><td><span class="table-status high">${incident.risk_level}</span></td><td>${Number(incident.voice_score || 0).toFixed(1)}% / ${Number(incident.security_risk || 0).toFixed(1)}%</td><td>${escapeHtml(incident.recommended_action)}</td><td><select class="incident-status" data-id="${incident.incident_id}"><option ${incident.status === "OPEN" ? "selected" : ""}>OPEN</option><option ${incident.status === "INVESTIGATING" ? "selected" : ""}>INVESTIGATING</option><option ${incident.status === "RESOLVED" ? "selected" : ""}>RESOLVED</option></select></td></tr>`).join("") || '<tr><td colspan="6" class="empty-state">No incidents created.</td></tr>';
+    $$("#incidents-table tr[data-incident]").forEach((row) => row.addEventListener("click", (event) => {
+      if (event.target.matches("select, option")) return;
+      const incident = state.incidents.find((item) => item.incident_id === row.dataset.incident);
+      if (!incident) return;
+      $("#incident-detail").innerHTML = `<div class="panel-heading"><div><p class="eyebrow">SELECTED CASE</p><h3>${escapeHtml(incident.incident_id)}</h3></div><span class="status-badge">${escapeHtml(incident.status)}</span></div><div class="incident-detail-grid"><div><span>ANALYSIS ID</span><b>${escapeHtml(incident.analysis_id || "—")}</b></div><div><span>CREATED</span><b>${escapeHtml(formatTime(incident.timestamp))}</b></div><div><span>SEVERITY</span><b>${escapeHtml(incident.risk_level || "—")}</b></div><div><span>DECISION</span><b>${escapeHtml(incident.recommended_action || "—")}</b></div><div><span>VOICE SCORE</span><b>${Number(incident.voice_score || 0).toFixed(1)}/100</b></div><div><span>SECURITY RISK</span><b>${Number(incident.security_risk || 0).toFixed(1)}/100</b></div></div><p class="muted incident-reason">${escapeHtml(incident.reason || "No reason recorded.")}</p>`;
+      $("#incident-detail").classList.remove("hidden");
+      $("#incident-detail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }));
     $$(".incident-status").forEach((select) => select.addEventListener("change", async () => {
       await api(`/api/incidents/${select.dataset.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: select.value }) });
       await loadIncidents();
@@ -278,7 +315,7 @@ async function loadAudit() {
   try {
     const data = await api("/api/audit");
     $("#audit-count").textContent = `${data.events.length} record${data.events.length === 1 ? "" : "s"}`;
-    $("#audit-table").innerHTML = data.events.map((event) => `<tr><td>${formatTime(event.timestamp)}</td><td>${escapeHtml(event.event_type)}</td><td>${escapeHtml(event.event_id.slice(0, 16))}</td><td><span class="table-status low">CHAINED</span></td><td>${escapeHtml(JSON.stringify(event.details || {}).slice(0, 70))}</td></tr>`).join("") || '<tr><td colspan="5" class="empty-state">No audit events yet.</td></tr>';
+    $("#audit-table").innerHTML = data.events.map((event) => `<tr><td>${formatTime(event.timestamp)}</td><td>${escapeHtml(event.event_type)}</td><td>${escapeHtml(event.event_id.slice(0, 16))}</td><td><span class="mono hash-value">${escapeHtml((event.event_hash || "").slice(0, 12)) || "—"}</span></td><td><span class="mono hash-value">${escapeHtml((event.previous_hash || "").slice(0, 12)) || "—"}</span></td><td>${escapeHtml(JSON.stringify(event.details || {}).slice(0, 70))}</td></tr>`).join("") || '<tr><td colspan="6" class="empty-state">No audit events yet.</td></tr>';
   } catch (error) { console.warn("Could not load audit", error); }
 }
 $("#verify-audit").addEventListener("click", async () => {
@@ -303,7 +340,7 @@ function evaluationMetric(value) {
 function renderEvaluation(evaluation) {
   const configured = Boolean(evaluation.configured);
   const evaluated = Number(evaluation.evaluated_count || 0);
-  $("#evaluation-title").textContent = !configured ? "Evaluation dataset not configured" : evaluated ? "Evaluation dataset processed" : "Evaluation dataset needs attention";
+  $("#evaluation-title").textContent = !configured ? "EVALUATION DATASET NOT CONFIGURED" : evaluated ? "EVALUATION DATASET PROCESSED" : "EVALUATION DATASET NEEDS ATTENTION";
   $("#evaluation-message").textContent = evaluation.message;
   $("#evaluation-count").textContent = `${evaluated} evaluated · ${Number(evaluation.skipped_count || 0)} skipped`;
   const metrics = evaluation.metrics;
@@ -401,7 +438,7 @@ $("#live-stop").addEventListener("click", () => {
   $("#live-status").textContent = "Capture stopped"; $("#live-substatus").textContent = "Start again to analyze new chunks.";
 });
 
-$("[data-action='refresh']").addEventListener("click", async () => { await loadHealth(); await loadEvents(); await loadIncidents(); });
+$$("[data-action='refresh']").forEach((button) => button.addEventListener("click", async () => { await loadHealth(); await loadEvents(); await loadIncidents(); }));
 const initialView = location.hash.replace("#", "");
 setView(pageMeta[initialView] ? initialView : "dashboard");
 loadHealth(); loadEvents(); loadIncidents();

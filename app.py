@@ -496,9 +496,20 @@ def health():
     })
 
 
+def safe_analysis_error(message: str) -> str:
+    lowered = message.lower()
+    if "model" in lowered or "tensorflow" in lowered or "predict" in lowered or "probability" in lowered:
+        return "VOICE ANALYSIS UNAVAILABLE. Manual verification required."
+    if "too short" in lowered or "not enough audible speech" in lowered:
+        return "INSUFFICIENT SPEECH. Capture a longer recording and use manual verification if needed."
+    if "no usable audio" in lowered or "no audible speech" in lowered or "decode" in lowered:
+        return "INVALID AUDIO. Use a supported recording and complete manual verification if needed."
+    return "VOICE ANALYSIS UNAVAILABLE. Manual verification required."
+
+
 @app.errorhandler(413)
 def request_too_large(_error):
-    return jsonify({"success": False, "error": "The audio file is larger than the 100 MB limit."}), 413
+    return jsonify({"success": False, "error": "INVALID AUDIO. The recording is larger than the 100 MB limit."}), 413
 
 
 @app.post("/predict")
@@ -506,13 +517,13 @@ def predict():
     started = time.perf_counter()
     uploaded = request.files.get("audio")
     if uploaded is None or not uploaded.filename:
-        return jsonify({"success": False, "error": "Attach an audio file using the 'audio' field."}), 400
+        return jsonify({"success": False, "error": "INVALID AUDIO. Attach a recording using the audio field."}), 400
     filename = secure_filename(uploaded.filename)
     if not filename or not allowed_file(filename):
-        return jsonify({"success": False, "error": "Unsupported audio format. Use WAV, MP3, M4A, OGG, or FLAC."}), 400
+        return jsonify({"success": False, "error": "INVALID AUDIO. Use WAV, MP3, M4A, OGG, or FLAC."}), 400
     if not all(MODELS.values()):
         missing = [version.upper() for version, model in MODELS.items() if model is None]
-        return jsonify({"success": False, "error": f"Real model inference unavailable. Missing/unloaded: {', '.join(missing)}.", "health": "/health"}), 503
+        return jsonify({"success": False, "error": "VOICE ANALYSIS UNAVAILABLE. Manual verification required.", "health": "/health", "missing_models": missing}), 503
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix.lower(), delete=False) as temp_file:
@@ -521,7 +532,7 @@ def predict():
         audio, _ = librosa.load(temp_path, sr=SAMPLE_RATE, mono=True)
         valid, validation = audio_validation_status(audio)
         if not valid:
-            return jsonify({"success": False, "error": validation["message"], "audio_validation": validation}), 422
+            return jsonify({"success": False, "error": safe_analysis_error(validation["message"]), "audio_validation": validation}), 422
         context = context_from_request(request.form)
         result = analyze_audio(audio, context)
         result["filename"] = filename
@@ -543,7 +554,7 @@ def predict():
         return jsonify({"success": True, "result": result})
     except Exception as exc:
         app.logger.exception("Prediction failed")
-        return jsonify({"success": False, "error": str(exc), "processing_time_ms": round((time.perf_counter() - started) * 1000, 2)}), 500
+        return jsonify({"success": False, "error": safe_analysis_error(str(exc)), "processing_time_ms": round((time.perf_counter() - started) * 1000, 2)}), 500
     finally:
         if temp_path:
             temp_path.unlink(missing_ok=True)

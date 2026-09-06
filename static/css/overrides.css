@@ -15,7 +15,18 @@
 .matrix-grid b{display:block;margin-top:7px;font-size:18px}
 .evaluation-note{margin:17px 0 0;font-size:10px;line-height:1.6}
 .csv-example{margin:18px 0 0;padding:14px;overflow:auto;border:1px solid var(--line);border-radius:6px;color:var(--teal);background:rgba(7,17,27,.55);font:11px var(--mono);line-height:1.7}
+.transaction-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}
+.workflow-list{display:grid;gap:0;margin:20px 0}
+.workflow-list div{display:flex;gap:13px;padding:13px 0;border-top:1px solid var(--line);color:var(--muted);font-size:10px;line-height:1.5}
+.workflow-list b{color:var(--teal);font:9px var(--mono)}
+.transaction-copy{font-size:11px;line-height:1.7}
+.evidence-groups{display:grid;gap:14px;margin-top:15px}
+.evidence-label{display:block;color:var(--teal);font:8px var(--mono);letter-spacing:.08em}
+.evidence-list{display:grid;gap:5px;margin:7px 0 0;padding-left:17px;color:var(--muted);font-size:10px;line-height:1.4}
+.hash-value{color:var(--teal);font-size:9px}
+.incident-reason{margin:20px 0 0;padding-top:15px;border-top:1px solid var(--line);font-size:10px;line-height:1.6}
 @media(max-width:760px){.evaluation-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:760px){.transaction-grid{grid-template-columns:1fr}}
 @media print{
   .sidebar,.topbar,.page-intro,.result-foot .text-button{display:none!important}
   .main-content{width:100%;margin:0;padding:0}
