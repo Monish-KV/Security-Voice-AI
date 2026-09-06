@@ -1,0 +1,428 @@
+Upgrade the current VoiceShield AI project into a complete, professional cybersecurity product for the SIH 2026 problem “AI-Powered Real-Time Detection and Prevention of Voice Cloning Impersonation Attacks.”
+
+IMPORTANT: Work intelligently within the existing project. First inspect the current files and implementation yourself. Do not ask me to manually check files that you can inspect. Do not waste a prompt just reporting whether a file exists.
+
+==================================================
+1. TRAINED ML MODELS — HIGHEST PRIORITY
+==================================================
+
+The project must use the REAL trained TensorFlow/Keras models:
+
+- audio_deepfake_v2.keras
+- audio_deepfake_v4.keras
+
+First search the entire current project for these files.
+
+If they already exist, use them.
+
+If they do NOT exist, retrieve/import the trained model files from my original GitHub repository:
+
+https://github.com/varunadhithya-07/Voice-security-ai
+
+Look specifically in its models/ directory.
+
+Do NOT create replacement models.
+Do NOT create dummy models.
+Do NOT use synthetic predictions.
+Do NOT use random scores.
+Do NOT use filename-based detection.
+Do NOT use MD5/hash-based pseudo-random scoring.
+Do NOT use heuristic detection as a substitute for the trained models.
+
+The actual TensorFlow/Keras models must be loaded and inference must use model.predict().
+
+If GitHub retrieval is technically impossible, clearly report the exact blocker rather than silently replacing the models.
+
+==================================================
+2. CORE DETECTION PIPELINE
+==================================================
+
+Build a reliable audio-analysis pipeline:
+
+User audio
+→ decode
+→ 16 kHz mono
+→ speech/audio validation
+→ appropriate feature preprocessing
+→ V2 inference
+→ V4 inference
+→ 50/50 ensemble
+→ model risk score
+→ security risk assessment
+
+Support common audio formats including:
+- WAV
+- MP3
+- M4A
+- OGG
+- FLAC
+
+Use the preprocessing required by the trained models. The known baseline is:
+- 16 kHz
+- 3-second windows
+- 1-second hop
+- 128 mel bins
+- maximum 65 time steps
+
+Do not claim model accuracy unless an actual evaluation has been performed.
+
+==================================================
+3. PROFESSIONAL SECURITY DASHBOARD
+==================================================
+
+Do not make this look like a simple student file-upload project.
+
+Create a polished cybersecurity command-center interface with sections such as:
+
+DASHBOARD
+- Overall security status
+- Recent analyses
+- Current threat level
+- Detection statistics
+- High-risk incidents
+- Model status
+- System health
+
+VOICE ANALYSIS
+- Upload recording
+- Drag/drop
+- Audio metadata
+- V2 score
+- V4 score
+- Ensemble score
+- Risk level
+- Processing time
+- Analysis timeline
+- Explainable “Why was this flagged?” section
+
+SECURITY CENTER
+Show a security decision based on the analysis:
+- Allow
+- Monitor
+- Verify
+- Escalate
+- Block
+
+Make clear that these are recommended security actions, not automatic banking actions.
+
+==================================================
+4. CONTEXTUAL RISK ENGINE
+==================================================
+
+Add a security-context panel where an analyst can optionally provide:
+
+- Caller type: Known / Unknown
+- First-time caller: Yes / No
+- Sensitive request: Yes / No
+- High-value transaction: Yes / No
+- Previous high-risk interaction: Yes / No
+- Requested action: Payment / Credential / Data / Other
+
+Combine these contextual signals with the voice-model result into an overall SECURITY RISK score.
+
+Clearly distinguish:
+
+MODEL SCORE
+from
+SECURITY RISK SCORE
+
+Do not pretend the contextual score is ML accuracy.
+
+==================================================
+5. IMPERSONATION / SPEAKER VERIFICATION
+==================================================
+
+Create a future-ready Speaker Verification section.
+
+Allow the architecture to support:
+- reference speaker enrollment
+- reference voice upload
+- comparison with analyzed voice
+- speaker similarity score
+- speaker mismatch warning
+
+If a genuine speaker-verification model is not available, DO NOT fabricate one.
+
+Instead provide a clearly labelled “Speaker verification module” architecture/status area showing that this is an extension point.
+
+==================================================
+6. SOCIAL ENGINEERING RISK
+==================================================
+
+Add a security-analysis section for suspicious requests.
+
+Examples:
+- urgent payment request
+- secrecy/confidentiality request
+- credential request
+- unusual authority claim
+- pressure to bypass normal verification
+- request to change bank/payment details
+
+Allow the analyst to mark detected signals.
+
+Show:
+SOCIAL ENGINEERING RISK
+LOW / MEDIUM / HIGH
+
+Clearly label these as contextual/security indicators rather than voice-model predictions.
+
+==================================================
+7. REAL-TIME / LIVE SIMULATION
+==================================================
+
+Add a Live Analysis mode designed for hackathon demonstration.
+
+It should simulate near-real-time voice analysis using microphone/audio chunks where technically practical.
+
+Show:
+- live analysis status
+- rolling risk score
+- detected events
+- timeline
+- recommended action
+
+Do NOT claim actual telecom call interception.
+
+Clearly label it:
+“Near-real-time prototype”
+
+==================================================
+8. INCIDENT MANAGEMENT
+==================================================
+
+Create an Incident Center.
+
+For each analyzed high-risk event, allow creation of an incident containing:
+
+- Incident ID
+- timestamp
+- risk level
+- voice score
+- contextual risk
+- recommended action
+- reason for flag
+- status:
+  Open / Investigating / Resolved
+
+Allow viewing incident details.
+
+Use local persistence if a database is unnecessary. Keep the architecture modular so a production database can later replace it.
+
+==================================================
+9. AUDIT & SECURITY
+==================================================
+
+Create a Security/Audit section.
+
+Track security events such as:
+- analysis performed
+- high-risk detection
+- security action
+- incident created
+- settings changed
+
+Use tamper-evident hashing/hash chaining for audit records if implemented.
+
+Provide:
+- audit event list
+- timestamp
+- event type
+- integrity status
+- audit verification action
+
+Do not claim this is blockchain.
+
+==================================================
+10. PRIVACY
+==================================================
+
+Create a Privacy Center.
+
+Show:
+- audio processing status
+- whether audio is stored
+- retention setting
+- anonymization/feature-only logging concept
+- privacy mode
+
+Default to processing uploaded audio temporarily and deleting temporary files after analysis where practical.
+
+Never expose raw audio unnecessarily.
+
+==================================================
+11. SETTINGS
+==================================================
+
+Create a proper Settings page containing:
+
+Detection Settings
+- model ensemble
+- risk thresholds
+- analysis window settings
+
+Security Settings
+- unknown caller policy
+- high-value transaction policy
+- verification requirement
+- escalation threshold
+
+Privacy Settings
+- audio retention
+- audit retention
+- anonymized logging
+
+System
+- model status
+- TensorFlow/Keras status
+- application version
+- environment status
+
+Do not provide settings that pretend to change trained-model behavior unless they actually do.
+
+==================================================
+12. REPORTING
+==================================================
+
+Create an Incident Report / Analysis Report view.
+
+Include:
+- analysis ID
+- date/time
+- audio metadata
+- V2 result
+- V4 result
+- ensemble
+- security risk
+- contextual signals
+- reasons for flag
+- recommended action
+- incident status
+
+Allow the report to be printed/exported if practical.
+
+==================================================
+13. API / INTEGRATION READY
+==================================================
+
+Maintain clean backend APIs such as:
+
+GET /health
+POST /predict
+GET /api/events
+GET /api/incidents
+POST /api/incidents
+GET /api/settings
+POST /api/settings
+GET /api/audit
+GET /api/audit/verify
+
+Structure the backend so external banking, enterprise, telecom, or security systems could integrate later.
+
+Do NOT fake external integrations.
+
+==================================================
+14. PRODUCTION-QUALITY ENGINEERING
+==================================================
+
+Make the code modular and maintainable.
+
+Include:
+- clear project structure
+- environment configuration
+- proper error handling
+- input validation
+- upload size limits
+- safe temporary-file handling
+- logging
+- model loading checks
+- health checks
+- clean API responses
+- responsive frontend
+- accessible UI
+- no exposed secrets
+- sensible security headers where practical
+
+Create a README explaining:
+- architecture
+- installation
+- model files
+- running locally
+- API endpoints
+- limitations
+- what is prototype vs production
+- how the ML pipeline works
+
+==================================================
+15. UI DESIGN
+==================================================
+
+Use a serious enterprise cybersecurity aesthetic.
+
+The application should feel like a security operations platform rather than a school project.
+
+Use:
+- professional dark dashboard
+- clear navigation/sidebar
+- cards
+- charts/visual indicators where useful
+- risk indicators
+- incident tables
+- model health indicators
+- responsive design
+- consistent typography and spacing
+
+Avoid excessive animations and unnecessary decorative elements.
+
+==================================================
+16. CRITICAL TRUTHFULNESS REQUIREMENTS
+==================================================
+
+Never fabricate:
+- model accuracy
+- detection accuracy
+- real-time telecom capability
+- speaker similarity
+- multilingual accuracy
+- banking integration
+- production deployment
+- AI confidence when it is not actually produced by the model
+
+Clearly distinguish:
+REAL ML OUTPUT
+CONTEXTUAL SECURITY LOGIC
+DEMO/SIMULATION FEATURES
+FUTURE EXTENSIONS
+
+==================================================
+17. FINAL VALIDATION
+==================================================
+
+After implementation:
+
+1. Verify whether V2 exists.
+2. Verify whether V4 exists.
+3. Verify both model files are valid Keras models.
+4. Load both models.
+5. Start the backend.
+6. Test /health.
+7. Upload a real voice recording if available.
+8. Run actual model.predict() for V2 and V4.
+9. Verify the ensemble calculation.
+10. Verify the UI displays the real results.
+11. Verify errors are handled without fake fallback predictions.
+
+At the end, give me a concise implementation report containing:
+
+- V2 model: FOUND / MISSING
+- V4 model: FOUND / MISSING
+- V2 loaded: YES / NO
+- V4 loaded: YES / NO
+- Real model.predict(): YES / NO
+- Audio upload: WORKING / NOT WORKING
+- Backend: WORKING / NOT WORKING
+- Frontend: WORKING / NOT WORKING
+- Major features implemented
+- Remaining blockers
+
+Do not stop after creating the UI. The trained ML inference pipeline is the most important requirement.

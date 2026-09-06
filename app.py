@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+import logging
 import os
+import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +13,7 @@ import numpy as np
 from flask import Flask, jsonify, render_template, request
 from werkzeug.utils import secure_filename
 
+import storage
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "models"
@@ -16,59 +21,48 @@ MODEL_PATHS = {
     "v2": MODEL_DIR / "audio_deepfake_v2.keras",
     "v4": MODEL_DIR / "audio_deepfake_v4.keras",
 }
-ALLOWED_EXTENSIONS = {
-    "wav",
-    "mp3",
-    "m4a",
-    "aac",
-    "ogg",
-    "flac",
-    "webm",
-    "aiff",
-    "aif",
-}
+ALLOWED_EXTENSIONS = {"wav", "mp3", "m4a", "aac", "ogg", "flac", "webm", "aiff", "aif"}
 SAMPLE_RATE = 16_000
 WINDOW_SECONDS = 3
 HOP_SECONDS = 1
 N_MELS = 128
 MAX_TIME_STEPS = 65
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+app.config["JSON_SORT_KEYS"] = False
+app.logger.setLevel(logging.INFO)
 
 try:
     import librosa
 except ImportError:
     librosa = None
-
 try:
     import tensorflow as tf
 except ImportError:
     tf = None
 
-
 MODELS: dict[str, Any] = {"v2": None, "v4": None}
 MODEL_ERRORS: dict[str, str | None] = {"v2": None, "v4": None}
+storage.initialize()
 
 
 def load_models() -> None:
-    """Load both trained models once at application startup."""
     if tf is None:
         message = "TensorFlow/Keras is not installed."
         MODEL_ERRORS.update({"v2": message, "v4": message})
         return
-
     for version, path in MODEL_PATHS.items():
         if not path.is_file():
             MODEL_ERRORS[version] = f"Model file not found: {path.relative_to(BASE_DIR)}"
             continue
         try:
-            # compile=False avoids requiring the training-time optimizer/loss
-            # objects while preserving the trained network for predict().
             MODELS[version] = tf.keras.models.load_model(path, compile=False)
-        except Exception as exc:  # Keras compatibility/model format errors
+            app.logger.info("Loaded real %s model from %s", version.upper(), path)
+        except Exception as exc:
             MODEL_ERRORS[version] = f"Could not load {path.name}: {exc}"
+            app.logger.exception("Could not load %s model", version.upper())
 
 
 load_models()
@@ -78,162 +72,254 @@ def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def audio_validation_status(audio: np.ndarray) -> tuple[bool, str]:
-    if audio.size == 0:
-        return False, "No audio samples were decoded."
-    if not np.isfinite(audio).all():
-        return False, "The decoded audio contains invalid numeric values."
-    peak = float(np.max(np.abs(audio)))
-    rms = float(np.sqrt(np.mean(np.square(audio), dtype=np.float64)))
-    if peak < 1e-5 or rms < 1e-5:
-        return False, "The recording appears to be silent."
-    return True, "Usable audio detected."
+def audio_validation_status(audio: np.ndarray) -> tuple[bool, dict[str, Any]]:
+    if audio.size == 0 or not np.isfinite(audio).all():
+        return False, {"message": "No usable audio was decoded.", "active_speech_seconds": 0}
+    duration = len(audio) / SAMPLE_RATE
+    if duration < 0.75:
+        return False, {"message": "Recording is too short. Capture at least 0.75 seconds.", "active_speech_seconds": 0}
+    if librosa is None:
+        return False, {"message": "Librosa is unavailable for speech validation.", "active_speech_seconds": 0}
+    rms = librosa.feature.rms(y=audio, frame_length=1024, hop_length=256)[0]
+    peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+    max_rms = float(np.max(rms)) if len(rms) else 0.0
+    if peak < 0.003 or max_rms < 0.003:
+        return False, {"message": "No audible speech was detected.", "active_speech_seconds": 0}
+    active_frames = int(np.sum(rms >= max(0.006, max_rms * 0.12)))
+    active_seconds = active_frames * 256 / SAMPLE_RATE
+    if active_seconds < 0.45:
+        return False, {"message": "Not enough audible speech was detected.", "active_speech_seconds": round(active_seconds, 2)}
+    return True, {
+        "message": "Usable speech/audio detected.",
+        "active_speech_seconds": round(active_seconds, 2),
+        "duration_seconds": round(duration, 2),
+    }
 
 
-def make_windows(audio: np.ndarray) -> np.ndarray:
-    """Create 3-second audio windows with a 1-second hop, padding the tail."""
-    window_size = WINDOW_SECONDS * SAMPLE_RATE
-    hop_size = HOP_SECONDS * SAMPLE_RATE
-    if len(audio) <= window_size:
-        starts = [0]
-    else:
-        starts = list(range(0, len(audio) - window_size + 1, hop_size))
-        if starts[-1] + window_size < len(audio):
-            starts.append(len(audio) - window_size)
-
-    windows = []
-    for start in starts:
-        window = audio[start : start + window_size]
-        if len(window) < window_size:
-            window = np.pad(window, (0, window_size - len(window)))
-        windows.append(window)
-    return np.asarray(windows, dtype=np.float32)
+def split_segments(audio: np.ndarray) -> list[tuple[int, np.ndarray]]:
+    window_samples = SAMPLE_RATE * WINDOW_SECONDS
+    hop_samples = SAMPLE_RATE * HOP_SECONDS
+    if len(audio) <= window_samples:
+        return [(0, audio)]
+    segments = []
+    start = 0
+    while start < len(audio):
+        segment = audio[start : start + window_samples]
+        if len(segment) >= SAMPLE_RATE:
+            segments.append((start, segment))
+        start += hop_samples
+    return segments or [(0, audio)]
 
 
-def extract_features(audio: np.ndarray) -> np.ndarray:
+def audio_to_features(segment: np.ndarray) -> np.ndarray:
     if librosa is None:
         raise RuntimeError("Librosa is not installed.")
-
-    features = []
-    for window in make_windows(audio):
-        mel = librosa.feature.melspectrogram(
-            y=window,
-            sr=SAMPLE_RATE,
-            n_fft=1024,
-            hop_length=512,
-            n_mels=N_MELS,
-            power=2.0,
-        )
-        mel_db = librosa.power_to_db(mel, ref=np.max)
-        # Models expect time-major mel features with a maximum of 65 frames.
-        time_major = mel_db.T
-        if time_major.shape[0] > MAX_TIME_STEPS:
-            time_major = time_major[:MAX_TIME_STEPS]
-        elif time_major.shape[0] < MAX_TIME_STEPS:
-            time_major = np.pad(
-                time_major,
-                ((0, MAX_TIME_STEPS - time_major.shape[0]), (0, 0)),
-                mode="constant",
-            )
-        features.append(time_major.astype(np.float32))
-    return np.asarray(features, dtype=np.float32)
-
-
-def model_input(features: np.ndarray, model: Any) -> np.ndarray:
-    """Adapt the fixed feature tensor to the model's declared input rank."""
-    shape = model.input_shape
-    if isinstance(shape, list):
-        if len(shape) != 1:
-            raise RuntimeError("Only single-input audio models are supported.")
-        shape = shape[0]
-    rank = len(shape)
-    if rank == 4:
-        return features[..., np.newaxis]
-    if rank == 3:
-        return features
-    if rank == 2:
-        expected = shape[-1]
-        actual = MAX_TIME_STEPS * N_MELS
-        if expected not in (None, actual):
-            raise RuntimeError(f"Model expects {expected} features, not {actual}.")
-        return features.reshape(features.shape[0], -1)
-    raise RuntimeError(f"Unsupported model input rank: {rank}.")
-
-
-def extract_probability(prediction: Any, version: str) -> float:
-    values = np.asarray(prediction, dtype=np.float32).squeeze()
-    if values.ndim == 0:
-        value = float(values)
-    elif values.ndim == 1 and values.size == 1:
-        value = float(values[0])
-    elif values.ndim == 1 and values.size == 2:
-        value = float(values[1])
+    target_length = SAMPLE_RATE * WINDOW_SECONDS
+    if len(segment) < target_length:
+        segment = np.pad(segment, (0, target_length - len(segment)))
     else:
-        raise RuntimeError(
-            f"{version.upper()} returned an unsupported prediction shape: {values.shape}."
-        )
-    if not np.isfinite(value) or not 0.0 <= value <= 1.0:
-        raise RuntimeError(
-            f"{version.upper()} returned a value outside the expected probability range."
-        )
-    return value
+        segment = segment[:target_length]
+    mel = librosa.feature.melspectrogram(
+        y=np.clip(segment, -1.0, 1.0),
+        sr=SAMPLE_RATE,
+        n_mels=N_MELS,
+    )
+    mel_db = librosa.power_to_db(mel, ref=np.max)
+    if mel_db.shape[1] < MAX_TIME_STEPS:
+        mel_db = np.pad(mel_db, ((0, 0), (0, MAX_TIME_STEPS - mel_db.shape[1])), mode="constant")
+    else:
+        mel_db = mel_db[:, :MAX_TIME_STEPS]
+    return mel_db[np.newaxis, ..., np.newaxis].astype(np.float32)
 
 
-def predict_for_model(version: str, features: np.ndarray) -> float:
+def model_predict(version: str, batch: np.ndarray) -> float:
     model = MODELS.get(version)
     if model is None:
         raise RuntimeError(MODEL_ERRORS[version] or f"{version.upper()} model is unavailable.")
-    batch = model_input(features, model)
-    predictions = model.predict(batch, verbose=0)
-    per_window = [extract_probability(row, version) for row in predictions]
-    if not per_window:
-        raise RuntimeError(f"{version.upper()} returned no predictions.")
-    return float(np.mean(per_window))
+    expected = tuple(model.input_shape)
+    if expected[1:] != (N_MELS, MAX_TIME_STEPS, 1):
+        raise RuntimeError(f"{version.upper()} input shape {expected} does not match (None, 128, 65, 1).")
+    prediction = np.asarray(model.predict(batch, verbose=0)).squeeze()
+    if prediction.ndim == 0:
+        real_probability = float(prediction)
+    elif prediction.ndim == 1 and prediction.size == 1:
+        real_probability = float(prediction[0])
+    else:
+        raise RuntimeError(f"{version.upper()} returned unsupported output shape {prediction.shape}.")
+    if not np.isfinite(real_probability) or not 0 <= real_probability <= 1:
+        raise RuntimeError(f"{version.upper()} returned an invalid probability.")
+    # The supplied models are trained to emit real-voice probability. The
+    # security score is the complementary deepfake probability.
+    return 1.0 - real_probability
 
 
-def risk_level(score: float) -> str:
-    if score < 0.33:
-        return "LOW"
-    if score < 0.66:
+def risk_level(score: float, settings: dict[str, Any]) -> str:
+    if score >= float(settings["high_threshold"]):
+        return "HIGH"
+    if score >= float(settings["medium_threshold"]):
         return "MEDIUM"
-    return "HIGH"
+    return "LOW"
+
+
+def context_from_request(source: dict[str, Any]) -> dict[str, Any]:
+    booleans = ("unknown_caller", "first_time_caller", "sensitive_request", "high_value_transaction", "previous_high_risk")
+    context = {key: str(source.get(key, "false")).lower() in {"true", "1", "yes", "on"} for key in booleans}
+    context["caller_type"] = source.get("caller_type", "KNOWN")
+    context["requested_action"] = source.get("requested_action", "OTHER")
+    context["social_signals"] = source.get("social_signals", [])
+    if isinstance(context["social_signals"], str):
+        try:
+            context["social_signals"] = json.loads(context["social_signals"])
+        except json.JSONDecodeError:
+            context["social_signals"] = [context["social_signals"]]
+    return context
+
+
+def assess_security(model_score: float, context: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    adjustment = 0.0
+    reasons: list[str] = []
+    if context["unknown_caller"] or context["caller_type"] == "UNKNOWN":
+        adjustment += 8
+        reasons.append("unknown caller")
+    if context["first_time_caller"]:
+        adjustment += 5
+        reasons.append("first-time caller")
+    if context["sensitive_request"]:
+        adjustment += 12
+        reasons.append("sensitive request")
+    if context["high_value_transaction"]:
+        adjustment += 15
+        reasons.append("high-value transaction")
+    if context["previous_high_risk"]:
+        adjustment += 10
+        reasons.append("previous high-risk interaction")
+    signal_weights = {
+        "urgent_payment": 12,
+        "secrecy_request": 10,
+        "credential_request": 14,
+        "authority_claim": 8,
+        "bypass_verification": 14,
+        "change_payment_details": 15,
+    }
+    social_score = 0.0
+    for signal in context["social_signals"]:
+        if signal in signal_weights:
+            social_score += signal_weights[signal]
+            reasons.append(signal.replace("_", " "))
+    social_score = min(100.0, social_score)
+    security_score = min(100.0, model_score + adjustment + social_score)
+    level = risk_level(security_score, settings)
+    if security_score >= float(settings["escalation_threshold"]):
+        action = "BLOCK"
+        recommendation = "Pause the request. Require independent callback and approved verification before proceeding."
+    elif level == "HIGH":
+        action = "ESCALATE"
+        recommendation = "Escalate to a security analyst and verify through a trusted channel."
+    elif level == "MEDIUM":
+        action = "VERIFY"
+        recommendation = "Monitor the interaction and complete an independent identity check."
+    elif context["unknown_caller"] or context["first_time_caller"]:
+        action = "MONITOR"
+        recommendation = "Continue only with normal controls and heightened monitoring."
+    else:
+        action = "ALLOW"
+        recommendation = "No strong synthetic signal detected; continue normal verification."
+    return {
+        "model_score": round(model_score, 2),
+        "context_adjustment": round(adjustment, 2),
+        "social_engineering_score": round(social_score, 2),
+        "security_risk_score": round(security_score, 2),
+        "risk_level": level,
+        "recommended_action": action,
+        "recommendation": recommendation,
+        "reasons": reasons or ["no additional contextual risk signals"],
+        "is_model_accuracy": False,
+    }
+
+
+def analyze_audio(audio: np.ndarray, context: dict[str, Any]) -> dict[str, Any]:
+    settings = storage.load_settings()
+    timeline = []
+    v2_scores, v4_scores, ensemble_scores = [], [], []
+    for start_sample, segment in split_segments(audio):
+        batch = audio_to_features(segment)
+        v2_score = model_predict("v2", batch) * 100
+        v4_score = model_predict("v4", batch) * 100
+        ensemble = (v2_score + v4_score) / 2
+        v2_scores.append(v2_score)
+        v4_scores.append(v4_score)
+        ensemble_scores.append(ensemble)
+        start = start_sample / SAMPLE_RATE
+        timeline.append({
+            "start_seconds": round(start, 2),
+            "end_seconds": round(min(start + WINDOW_SECONDS, len(audio) / SAMPLE_RATE), 2),
+            "v2_score": round(v2_score, 2),
+            "v4_score": round(v4_score, 2),
+            "ensemble_score": round(ensemble, 2),
+            "status": "HIGH" if ensemble >= float(settings["high_threshold"]) else "ELEVATED" if ensemble >= float(settings["medium_threshold"]) else "CLEAR",
+        })
+    model_score = float(np.mean(ensemble_scores))
+    security = assess_security(model_score, context, settings)
+    return {
+        "analysis_id": f"AN-{uuid.uuid4().hex[:10].upper()}",
+        "duration_seconds": round(len(audio) / SAMPLE_RATE, 2),
+        "v2_score": round(float(np.mean(v2_scores)), 2),
+        "v4_score": round(float(np.mean(v4_scores)), 2),
+        "ensemble_score": round(model_score, 2),
+        "model_score": round(model_score, 2),
+        "security": security,
+        "timeline": timeline,
+        "context": context,
+        "speaker_verification": {
+            "available": False,
+            "status": "Extension point only",
+            "message": "No genuine speaker-verification model is installed. No similarity score was fabricated.",
+        },
+        "model_statement": "Real output from trained V2 + V4 TensorFlow/Keras models via model.predict().",
+        "privacy": {"raw_audio_retained": False, "raw_audio_deleted_after_analysis": True},
+        "settings_snapshot": {
+            "medium_threshold": settings["medium_threshold"],
+            "high_threshold": settings["high_threshold"],
+        },
+    }
+
+
+@app.after_request
+def security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 @app.get("/")
 def index():
-    return render_template(
-        "index.html",
-        tensorflow_available=tf is not None,
-        models_loaded=all(model is not None for model in MODELS.values()),
-    )
+    return render_template("index.html")
 
 
 @app.get("/health")
 def health():
-    return jsonify(
-        {
-            "status": "ok",
-            "tensorflow_available": tf is not None,
-            "keras_available": tf is not None,
-            "models": {
-                "v2": {
-                    "loaded": MODELS["v2"] is not None,
-                    "path": str(MODEL_PATHS["v2"].relative_to(BASE_DIR)),
-                    "error": MODEL_ERRORS["v2"],
-                },
-                "v4": {
-                    "loaded": MODELS["v4"] is not None,
-                    "path": str(MODEL_PATHS["v4"].relative_to(BASE_DIR)),
-                    "error": MODEL_ERRORS["v4"],
-                },
-            },
-        }
-    )
+    return jsonify({
+        "status": "online",
+        "tensorflow_available": tf is not None,
+        "keras_available": tf is not None,
+        "models": {
+            version: {
+                "loaded": MODELS[version] is not None,
+                "path": str(path.relative_to(BASE_DIR)),
+                "error": MODEL_ERRORS[version],
+                "input_shape": str(getattr(MODELS[version], "input_shape", "")) if MODELS[version] is not None else None,
+            }
+            for version, path in MODEL_PATHS.items()
+        },
+        "audio_pipeline": {"sample_rate": SAMPLE_RATE, "window_seconds": WINDOW_SECONDS, "hop_seconds": HOP_SECONDS, "mel_bins": N_MELS, "max_time_steps": MAX_TIME_STEPS},
+        "speaker_verification": {"available": False, "status": "extension_point"},
+    })
 
 
 @app.errorhandler(413)
 def request_too_large(_error):
-    return jsonify({"error": "The audio file is larger than the 50 MB limit."}), 413
+    return jsonify({"success": False, "error": "The audio file is larger than the 100 MB limit."}), 413
 
 
 @app.post("/predict")
@@ -241,67 +327,124 @@ def predict():
     started = time.perf_counter()
     uploaded = request.files.get("audio")
     if uploaded is None or not uploaded.filename:
-        return jsonify({"error": "Attach an audio file using the 'audio' field."}), 400
-
+        return jsonify({"success": False, "error": "Attach an audio file using the 'audio' field."}), 400
     filename = secure_filename(uploaded.filename)
     if not filename or not allowed_file(filename):
-        return jsonify(
-            {
-                "error": "Unsupported audio format. Use WAV, MP3, M4A, OGG, FLAC, or another supported format."
-            }
-        ), 400
-
-    temp_path = None
+        return jsonify({"success": False, "error": "Unsupported audio format. Use WAV, MP3, M4A, OGG, or FLAC."}), 400
+    if not all(MODELS.values()):
+        missing = [version.upper() for version, model in MODELS.items() if model is None]
+        return jsonify({"success": False, "error": f"Real model inference unavailable. Missing/unloaded: {', '.join(missing)}.", "health": "/health"}), 503
+    temp_path: Path | None = None
     try:
-        # Librosa delegates compressed formats to FFmpeg/audioread when needed.
-        import tempfile
-
-        suffix = Path(filename).suffix.lower()
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix.lower(), delete=False) as temp_file:
             temp_path = Path(temp_file.name)
             uploaded.save(temp_path)
-        if librosa is None:
-            raise RuntimeError("Librosa is not installed.")
         audio, _ = librosa.load(temp_path, sr=SAMPLE_RATE, mono=True)
-        valid, validation_message = audio_validation_status(audio)
+        valid, validation = audio_validation_status(audio)
         if not valid:
-            return jsonify(
-                {
-                    "error": validation_message,
-                    "filename": filename,
-                    "audio_validation": {"valid": False, "message": validation_message},
-                }
-            ), 422
-
-        features = extract_features(audio)
-        v2_score = predict_for_model("v2", features)
-        v4_score = predict_for_model("v4", features)
-        ensemble = (v2_score + v4_score) / 2.0
-        elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
-        return jsonify(
-            {
-                "filename": filename,
-                "duration_seconds": round(float(len(audio) / SAMPLE_RATE), 2),
-                "audio_validation": {"valid": True, "message": validation_message},
-                "v2_prediction": round(v2_score, 6),
-                "v4_prediction": round(v4_score, 6),
-                "ensemble_score": round(ensemble, 6),
-                "risk_level": risk_level(ensemble),
-                "processing_time_ms": elapsed_ms,
-                "model_statement": "Prediction generated by trained V2 + V4 TensorFlow/Keras models.",
-            }
-        )
+            return jsonify({"success": False, "error": validation["message"], "audio_validation": validation}), 422
+        context = context_from_request(request.form)
+        result = analyze_audio(audio, context)
+        result["filename"] = filename
+        result["audio_validation"] = {"valid": True, **validation}
+        result["processing_time_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        audit = storage.append_audit("ANALYSIS_PERFORMED", {
+            "analysis_id": result["analysis_id"],
+            "filename": filename if not storage.load_settings()["anonymized_logging"] else "redacted",
+            "risk_level": result["security"]["risk_level"],
+            "security_risk_score": result["security"]["security_risk_score"],
+            "model_score": result["model_score"],
+            "source_type": request.form.get("source_type", "uploaded_recording"),
+        })
+        if result["security"]["risk_level"] == "HIGH":
+            storage.append_audit("HIGH_RISK_DETECTION", {"analysis_id": result["analysis_id"], "risk_score": result["security"]["security_risk_score"]})
+        result["audit_event_id"] = audit["event_id"]
+        result["audit_integrity"] = "CHAINED"
+        return jsonify({"success": True, "result": result})
     except Exception as exc:
-        return jsonify(
-            {
-                "error": str(exc),
-                "filename": filename,
-                "processing_time_ms": round((time.perf_counter() - started) * 1000, 2),
-            }
-        ), 500
+        app.logger.exception("Prediction failed")
+        return jsonify({"success": False, "error": str(exc), "processing_time_ms": round((time.perf_counter() - started) * 1000, 2)}), 500
     finally:
-        if temp_path is not None:
+        if temp_path:
             temp_path.unlink(missing_ok=True)
+
+
+@app.get("/api/events")
+def api_events():
+    return jsonify({"success": True, "events": storage.read_audit()})
+
+
+@app.get("/api/incidents")
+def api_incidents():
+    return jsonify({"success": True, "incidents": storage.read_incidents()})
+
+
+@app.post("/api/incidents")
+def api_create_incident():
+    payload = request.get_json(silent=True) or {}
+    if not payload.get("analysis_id") and not payload.get("reason"):
+        return jsonify({"success": False, "error": "An analysis ID or incident reason is required."}), 400
+    return jsonify({"success": True, "incident": storage.create_incident(payload)}), 201
+
+
+@app.patch("/api/incidents/<incident_id>")
+def api_update_incident(incident_id: str):
+    payload = request.get_json(silent=True) or {}
+    try:
+        incident = storage.update_incident(incident_id, str(payload.get("status", "")).upper())
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    if incident is None:
+        return jsonify({"success": False, "error": "Incident not found."}), 404
+    return jsonify({"success": True, "incident": incident})
+
+
+@app.get("/api/settings")
+def api_get_settings():
+    return jsonify({"success": True, "settings": storage.load_settings()})
+
+
+@app.post("/api/settings")
+def api_save_settings():
+    try:
+        return jsonify({"success": True, "settings": storage.save_settings(request.get_json(silent=True) or {})})
+    except (TypeError, ValueError) as exc:
+        return jsonify({"success": False, "error": f"Invalid setting: {exc}"}), 400
+
+
+@app.get("/api/audit")
+def api_audit():
+    return jsonify({"success": True, "events": storage.read_audit()})
+
+
+@app.get("/api/audit/verify")
+def api_audit_verify():
+    return jsonify(storage.verify_audit())
+
+
+@app.get("/api/privacy")
+def api_privacy():
+    verification = storage.verify_audit()
+    return jsonify({
+        "success": True,
+        "raw_audio_retained": False,
+        "temporary_files_deleted": True,
+        "retention_setting": storage.load_settings()["audio_retention"],
+        "audit_chain_valid": verification["valid"],
+        "audit_event_count": verification["checked"],
+        "speaker_verification_available": False,
+    })
+
+
+@app.post("/api/security-action")
+def api_security_action():
+    payload = request.get_json(silent=True) or {}
+    event = storage.append_audit("SECURITY_ACTION", {
+        "action": payload.get("action", "VERIFY"),
+        "analysis_id": payload.get("analysis_id"),
+        "risk_level": payload.get("risk_level"),
+    })
+    return jsonify({"success": True, "event": event})
 
 
 if __name__ == "__main__":

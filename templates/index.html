@@ -1,93 +1,94 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#08121e">
-    <title>VoiceShield AI · Deepfake Detection</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230e1d2b'/%3E%3Cpath d='M9 20V12m7 12V8m7 12v-8' stroke='%235ee7d2' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-  </head>
-  <body>
-    <div class="ambient ambient-one"></div>
-    <div class="ambient ambient-two"></div>
-    <header class="topbar shell">
-      <a class="brand" href="/">
-        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
-        <span>VoiceShield <em>AI</em></span>
-      </a>
-      <div class="topbar-status"><span class="status-dot"></span> Analysis console <span class="divider"></span> v1.0 MVP</div>
-    </header>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07111b">
+  <title>VoiceShield AI · Security Operations</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230e1d2b'/%3E%3Cpath d='M9 20V12m7 12V8m7 12v-8' stroke='%235ee7d2' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/overrides.css') }}">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" data-nav="dashboard"><span class="brand-mark"><i></i><i></i><i></i></span><span>VoiceShield <b>AI</b></span></a>
+      <div class="workspace-label">SECURITY OPERATIONS</div>
+      <nav class="nav">
+        <button class="nav-item active" data-nav="dashboard"><span>▦</span> Dashboard</button>
+        <button class="nav-item" data-nav="analysis"><span>⌁</span> Voice analysis</button>
+        <button class="nav-item" data-nav="live"><span>◉</span> Live analysis <em>PROTO</em></button>
+        <button class="nav-item" data-nav="incidents"><span>⊙</span> Incident center</button>
+      </nav>
+      <div class="workspace-label secondary-label">GOVERNANCE</div>
+      <nav class="nav">
+        <button class="nav-item" data-nav="audit"><span>≡</span> Audit trail</button>
+        <button class="nav-item" data-nav="privacy"><span>◇</span> Privacy center</button>
+        <button class="nav-item" data-nav="settings"><span>⚙</span> Settings</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="system-mini"><span class="online-dot"></span><div><b>System online</b><small>Prototype environment</small></div></div>
+        <div class="version">VOICESHIELD AI <span>v2.0</span></div>
+      </div>
+    </aside>
 
-    <main class="shell">
-      <section class="hero">
-        <div class="eyebrow"><span class="eyebrow-line"></span> AUDIO INTEGRITY LAB</div>
-        <h1>Is the voice <span>really human?</span></h1>
-        <p class="hero-copy">Upload a recording to screen for synthetic voice artifacts with two independent deepfake detection models.</p>
-      </section>
+    <main class="main-content">
+      <header class="topbar">
+        <div><div class="breadcrumb"><span>SECURITY OPERATIONS</span><b>/</b><strong id="page-kicker">OVERVIEW</strong></div><h1 id="page-title">Command center</h1></div>
+        <div class="top-actions"><div class="health-chip"><span class="online-dot"></span><span id="header-health">Checking system health</span></div><button class="icon-button" title="Refresh dashboard" data-action="refresh">↻</button></div>
+      </header>
 
-      <section class="workspace">
-        <form id="analysis-form" class="upload-card">
-          <div class="card-heading">
-            <div>
-              <p class="section-label">01 / SOURCE AUDIO</p>
-              <h2>Drop a recording to begin</h2>
-            </div>
-            <span class="file-limit">MAX 50 MB</span>
-          </div>
-          <label id="drop-zone" class="drop-zone" for="audio-file">
-            <input id="audio-file" name="audio" type="file" accept="audio/*,.m4a,.mp3,.wav,.ogg,.flac">
-            <span class="upload-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v3.5A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5V14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </span>
-            <strong id="drop-title">Choose an audio file</strong>
-            <span id="drop-subtitle">Drag and drop or browse from your device</span>
-            <span class="format-list">WAV &nbsp;·&nbsp; MP3 &nbsp;·&nbsp; M4A &nbsp;·&nbsp; OGG &nbsp;·&nbsp; FLAC</span>
-          </label>
-          <div id="selected-file" class="selected-file hidden">
-            <span class="audio-file-icon">♪</span>
-            <div class="selected-file-info"><strong id="selected-name"></strong><span id="selected-meta"></span></div>
-            <button id="clear-file" type="button" aria-label="Remove selected file">×</button>
-          </div>
-          <button id="analyze-button" class="primary-button" type="submit" disabled>
-            <span class="button-label">Analyze recording <span>→</span></span>
-            <span class="button-loading hidden"><span class="spinner"></span> Running models…</span>
-          </button>
-          <p class="privacy-note"><span aria-hidden="true">⌁</span> Audio is processed for this analysis and is not stored.</p>
-        </form>
-
-        <aside class="method-card">
-          <p class="section-label">02 / DETECTION METHOD</p>
-          <h2>Two models.<br><span>One clearer signal.</span></h2>
-          <p class="method-copy">VoiceShield compares independent V2 and V4 TensorFlow models, then combines their outputs to produce an ensemble risk score.</p>
-          <div class="model-list">
-            <div class="model-row"><span class="model-badge">V2</span><div><strong>Audio Deepfake V2</strong><small>Independent classifier</small></div><span class="model-state" data-model="v2">●</span></div>
-            <div class="model-row"><span class="model-badge">V4</span><div><strong>Audio Deepfake V4</strong><small>Independent classifier</small></div><span class="model-state" data-model="v4">●</span></div>
-          </div>
-          <div class="method-foot"><span class="pulse-dot"></span><span id="system-status">Checking model status…</span></div>
-        </aside>
-      </section>
-
-      <section id="error-panel" class="message-panel error-panel hidden" role="alert"></section>
-
-      <section id="results" class="results hidden">
-        <div class="results-header">
-          <div><p class="section-label">03 / ANALYSIS RESULT</p><h2>Recording assessment</h2></div>
-          <div id="risk-pill" class="risk-pill"><span class="risk-dot"></span><span id="risk-label">—</span></div>
+      <section class="view active" id="view-dashboard">
+        <div class="welcome-row"><div><p class="eyebrow">SUNDAY · SEPTEMBER 06, 2026</p><h2>Good morning, <span>analyst.</span></h2><p class="muted">Monitor voice integrity and respond to impersonation signals.</p></div><button class="primary-button compact" data-nav="analysis">＋ New analysis</button></div>
+        <div class="stat-grid">
+          <article class="stat-card accent-card"><span class="card-label">CURRENT THREAT LEVEL</span><div class="stat-main"><strong id="dash-threat">CLEAR</strong><span class="threat-dot"></span></div><p id="dash-threat-note">No active high-risk events</p></article>
+          <article class="stat-card"><span class="card-label">ANALYSES TODAY</span><strong class="big-number" id="dash-analyses">0</strong><p>Uploaded recordings processed</p></article>
+          <article class="stat-card"><span class="card-label">HIGH-RISK EVENTS</span><strong class="big-number orange" id="dash-high">0</strong><p>Requires analyst attention</p></article>
+          <article class="stat-card"><span class="card-label">AUDIT INTEGRITY</span><strong class="big-number teal" id="dash-integrity">—</strong><p id="dash-integrity-note">Hash chain status</p></article>
         </div>
-        <div class="result-grid">
-          <div class="score-card main-score"><span class="score-label">ENSEMBLE RISK SCORE</span><div class="score-value"><strong id="ensemble-score">—</strong><span>/ 100</span></div><div class="score-meter"><span id="score-meter-fill"></span></div><p id="risk-description">Application risk classification</p></div>
-          <div class="metric-card"><span class="score-label">MODEL OUTPUTS</span><div class="model-metric"><span>V2 prediction</span><strong id="v2-score">—</strong></div><div class="model-metric"><span>V4 prediction</span><strong id="v4-score">—</strong></div></div>
-          <div class="metric-card"><span class="score-label">RECORDING DETAILS</span><div class="detail-line"><span>File</span><strong id="result-filename">—</strong></div><div class="detail-line"><span>Duration</span><strong id="result-duration">—</strong></div><div class="detail-line"><span>Processing</span><strong id="result-time">—</strong></div></div>
+        <div class="section-grid">
+          <section class="panel recent-panel"><div class="panel-heading"><div><p class="eyebrow">ACTIVITY STREAM</p><h3>Recent analyses</h3></div><button class="text-button" data-nav="incidents">View all →</button></div><div class="table-wrap"><table><thead><tr><th>ANALYSIS</th><th>TIME</th><th>MODEL SCORE</th><th>SECURITY RISK</th><th>STATUS</th></tr></thead><tbody id="recent-analyses"><tr><td colspan="5" class="empty-state">No analyses recorded yet. Start with an audio recording.</td></tr></tbody></table></div></section>
+          <section class="panel model-panel"><div class="panel-heading"><div><p class="eyebrow">INFERENCE STACK</p><h3>Model status</h3></div><span class="status-badge" id="model-stack-status">CHECKING</span></div><div class="model-health-row"><div class="model-icon">V2</div><div class="grow"><b>Audio deepfake V2</b><small>Primary trained classifier</small></div><span class="health-state" id="dash-v2">Checking</span></div><div class="model-health-row"><div class="model-icon">V4</div><div class="grow"><b>Audio deepfake V4</b><small>Independent trained classifier</small></div><span class="health-state" id="dash-v4">Checking</span></div><div class="stack-note"><span class="online-dot"></span><span>50/50 ensemble · TensorFlow/Keras</span></div></section>
         </div>
-        <div class="model-statement"><span class="verified-check">✓</span><span id="model-statement">Prediction generated by trained V2 + V4 TensorFlow/Keras models.</span></div>
+        <section class="panel modules-panel"><div class="panel-heading"><div><p class="eyebrow">SECURITY MODULES</p><h3>Operational coverage</h3></div><span class="muted mono">TRUTHFUL STATUS</span></div><div class="module-grid"><button class="module-card" data-nav="analysis"><span class="module-icon teal">⌁</span><b>Voice integrity</b><small>Real V2 + V4 model inference</small><span class="module-link">Open analysis →</span></button><button class="module-card" data-nav="live"><span class="module-icon blue">◉</span><b>Near-real-time prototype</b><small>Browser microphone chunk capture</small><span class="module-link">Open live mode →</span></button><button class="module-card" data-nav="incidents"><span class="module-icon orange">⊙</span><b>Incident response</b><small>Local case tracking and actions</small><span class="module-link">Open incidents →</span></button><button class="module-card" data-nav="audit"><span class="module-icon violet">≡</span><b>Audit integrity</b><small>Hash-chained security events</small><span class="module-link">Verify trail →</span></button></div></section>
       </section>
 
-      <footer><span>VOICESHIELD AI</span><span>UPLOADED RECORDING ANALYSIS · NOT REAL-TIME CALL DETECTION</span></footer>
+      <section class="view" id="view-analysis">
+        <div class="page-intro"><div><p class="eyebrow">VOICE INTEGRITY LAB · PRIMARY DETECTOR</p><h2>Analyze a recording</h2><p class="muted">Run the trained V2 and V4 classifiers, then add security context for an analyst recommendation.</p></div><div class="truth-tag">REAL ML OUTPUT <span>·</span> CONTEXTUAL LOGIC SEPARATE</div></div>
+        <div class="analysis-layout">
+          <div>
+            <form id="analysis-form" class="panel upload-panel">
+              <div class="panel-heading"><div><p class="eyebrow">01 / SOURCE AUDIO</p><h3>Upload recording</h3></div><span class="mono muted">MAX 100 MB</span></div>
+              <label id="drop-zone" class="drop-zone" for="audio-file"><input id="audio-file" name="audio" type="file" accept="audio/*,.m4a,.mp3,.wav,.ogg,.flac"><span class="upload-ring">↑</span><b id="drop-title">Drop an audio file here</b><small id="drop-subtitle">or browse from your device</small><span class="format-list">WAV · MP3 · M4A · OGG · FLAC</span></label>
+              <div id="selected-file" class="selected-file hidden"><span class="file-symbol">♪</span><div class="grow"><b id="selected-name"></b><small id="selected-meta"></small></div><button id="clear-file" type="button">×</button></div>
+              <button id="analyze-button" class="primary-button wide" type="submit" disabled><span class="button-label">Run voice integrity analysis <b>→</b></span><span class="button-loading hidden"><span class="spinner"></span> Running V2 + V4 models…</span></button>
+              <div class="privacy-line">⌁ Temporary processing only · raw audio is deleted after analysis</div>
+            </form>
+            <section class="panel context-panel"><div class="panel-heading"><div><p class="eyebrow">02 / SECURITY CONTEXT</p><h3>What else do we know?</h3></div><span class="context-note">OPTIONAL SIGNALS</span></div><div class="field-grid"><label><span>Caller type</span><select name="caller_type" form="analysis-form"><option value="KNOWN">Known</option><option value="UNKNOWN">Unknown</option></select></label><label><span>Requested action</span><select name="requested_action" form="analysis-form"><option value="OTHER">Other</option><option value="PAYMENT">Payment</option><option value="CREDENTIAL">Credential</option><option value="DATA">Data</option></select></label></div><div class="toggle-grid"><label class="toggle-row"><input type="checkbox" name="first_time_caller" form="analysis-form"><span class="fake-toggle"></span><span>First-time caller</span></label><label class="toggle-row"><input type="checkbox" name="sensitive_request" form="analysis-form"><span class="fake-toggle"></span><span>Sensitive request</span></label><label class="toggle-row"><input type="checkbox" name="high_value_transaction" form="analysis-form"><span class="fake-toggle"></span><span>High-value transaction</span></label><label class="toggle-row"><input type="checkbox" name="previous_high_risk" form="analysis-form"><span class="fake-toggle"></span><span>Previous high-risk interaction</span></label></div><div class="signal-heading"><span>Social engineering indicators</span><small>CONTEXTUAL ONLY</small></div><div class="signal-grid"><label class="signal-chip"><input type="checkbox" value="urgent_payment"><span>Urgent payment</span></label><label class="signal-chip"><input type="checkbox" value="secrecy_request"><span>Secrecy request</span></label><label class="signal-chip"><input type="checkbox" value="credential_request"><span>Credential request</span></label><label class="signal-chip"><input type="checkbox" value="authority_claim"><span>Authority claim</span></label><label class="signal-chip"><input type="checkbox" value="bypass_verification"><span>Bypass verification</span></label><label class="signal-chip"><input type="checkbox" value="change_payment_details"><span>Change payment details</span></label></div></section>
+          </div>
+          <aside class="analysis-side"><section class="panel pipeline-panel"><p class="eyebrow">DETECTION PIPELINE</p><h3>From voice to decision</h3><div class="pipeline"><div><i class="done">✓</i><span>Decode & normalize<small>16 kHz · mono</small></span></div><div><i class="done">✓</i><span>Feature extraction<small>128 mel · 65 steps</small></span></div><div><i class="model-step">V2</i><span>Deepfake classifier<small>Trained Keras model</small></span></div><div><i class="model-step">V4</i><span>Deepfake classifier<small>Trained Keras model</small></span></div><div><i class="ensemble-step">+</i><span>50/50 ensemble<small>Model score only</small></span></div></div></section><section class="panel extension-panel"><div class="panel-heading"><div><p class="eyebrow">FUTURE EXTENSION</p><h3>Speaker verification</h3></div><span class="status-badge muted-badge">NOT INSTALLED</span></div><p>Reference voice enrollment and speaker comparison are architecturally reserved, but no genuine verification model is available. No similarity score will be fabricated.</p><span class="extension-state">MODULE STATUS · EXTENSION POINT</span></section></aside>
+        </div>
+        <section id="error-panel" class="message-panel error-panel hidden" role="alert"></section>
+        <section id="result-panel" class="panel result-panel hidden"><div class="result-top"><div><p class="eyebrow">03 / ANALYSIS RESULT</p><h3 id="result-file-title">Recording assessment</h3><p class="mono muted" id="result-id"></p></div><div id="risk-pill" class="risk-pill"><span></span><b id="risk-label">—</b></div></div><div class="result-cards"><article class="score-card primary-score"><span class="card-label">MODEL SCORE · DEEPFAKE PROBABILITY</span><div><strong id="ensemble-score">—</strong><small>/ 100</small></div><div class="score-bar"><i id="score-fill"></i></div><p>50/50 ensemble of the real trained V2 and V4 outputs.</p></article><article class="score-card security-score"><span class="card-label">SECURITY RISK SCORE</span><div><strong id="security-score">—</strong><small>/ 100</small></div><div class="score-bar"><i id="security-fill"></i></div><p id="security-note">Model score plus explicit analyst context.</p></article><article class="score-card"><span class="card-label">MODEL OUTPUTS</span><div class="mini-metric"><span>V2 prediction</span><b id="v2-score">—</b></div><div class="mini-metric"><span>V4 prediction</span><b id="v4-score">—</b></div><div class="mini-metric"><span>Processing time</span><b id="result-time">—</b></div></article></div><div class="result-lower"><div><div class="subheading">Analysis timeline</div><div id="timeline" class="timeline"></div></div><div class="why-box"><div class="subheading">Why was this flagged?</div><p id="why-flagged">—</p><div class="result-meta"><span>File <b id="result-filename">—</b></span><span>Duration <b id="result-duration">—</b></span></div></div></div><div class="decision-strip"><div><span class="card-label">RECOMMENDED SECURITY ACTION</span><strong id="recommended-action">—</strong><small id="recommendation">—</small></div><div class="decision-actions"><button class="secondary-button action-button" data-action="security" data-value="VERIFY">Verify</button><button class="primary-button action-button" data-action="security" data-value="ESCALATE">Escalate</button><button class="secondary-button action-button" id="create-incident">Create incident</button></div></div><div class="result-foot"><span class="verified-check">✓</span><span id="model-statement">Real output from trained V2 + V4 TensorFlow/Keras models via model.predict().</span><button class="text-button" id="print-report">Print report ↗</button></div></section>
+      </section>
+
+      <section class="view" id="view-live">
+        <div class="page-intro"><div><p class="eyebrow">DEMONSTRATION MODE · BROWSER MICROPHONE</p><h2>Near-real-time prototype</h2><p class="muted">Analyze short microphone chunks with the same real V2 + V4 pipeline. This is not telecom interception or a live banking control.</p></div><span class="truth-tag blue-tag">SIMULATION / PROTOTYPE</span></div>
+        <div class="live-grid"><section class="panel live-console"><div class="live-header"><div class="live-orb"><span></span></div><div><p class="eyebrow">LIVE ANALYSIS STATUS</p><h3 id="live-status">Ready to capture</h3><p class="muted" id="live-substatus">Microphone permission is requested only when you start.</p></div><span class="status-badge" id="live-badge">IDLE</span></div><div class="rolling-score"><span class="card-label">ROLLING MODEL SCORE</span><strong id="live-score">—</strong><div class="score-bar"><i id="live-fill"></i></div></div><div class="live-controls"><button class="primary-button" id="live-start">Start microphone</button><button class="secondary-button hidden" id="live-stop">Stop capture</button></div><div id="live-events" class="live-events"><div class="empty-state">No live chunks analyzed yet.</div></div></section><section class="panel"><p class="eyebrow">DEMO BOUNDARIES</p><h3>What this mode proves</h3><ul class="boundary-list"><li><b>Real chunk path</b><span>Microphone data is sent to POST /predict when models are loaded.</span></li><li><b>Same detector</b><span>Uses the V2 + V4 ensemble; no live-only score is invented.</span></li><li><b>Not telecom interception</b><span>Does not access calls, banking systems, or external services.</span></li></ul><div class="live-timeline" id="live-timeline"><span></span><span></span><span></span><span></span><span></span><span></span></div></section></div>
+      </section>
+
+      <section class="view" id="view-incidents"><div class="page-intro"><div><p class="eyebrow">CASE MANAGEMENT</p><h2>Incident center</h2><p class="muted">Track analyst-created cases from high-risk voice events. Storage is local to this prototype.</p></div><span class="count-chip" id="incident-count">0 OPEN</span></div><section class="panel"><div class="panel-heading"><div><p class="eyebrow">OPEN CASES</p><h3>Investigation queue</h3></div><button class="text-button" data-action="refresh">Refresh ↻</button></div><div class="table-wrap"><table><thead><tr><th>INCIDENT</th><th>CREATED</th><th>RISK</th><th>VOICE / SECURITY</th><th>ACTION</th><th>STATUS</th></tr></thead><tbody id="incidents-table"><tr><td colspan="6" class="empty-state">No incidents created.</td></tr></tbody></table></div></section><section id="incident-detail" class="panel detail-panel hidden"></section></section>
+
+      <section class="view" id="view-audit"><div class="page-intro"><div><p class="eyebrow">GOVERNANCE / INTEGRITY</p><h2>Audit trail</h2><p class="muted">Security events are recorded locally with tamper-evident SHA-256 hash chaining.</p></div><button class="secondary-button" id="verify-audit">Verify integrity</button></div><div id="audit-verification" class="verification-banner hidden"></div><section class="panel"><div class="panel-heading"><div><p class="eyebrow">EVENT LOG</p><h3>Security events</h3></div><span class="mono muted" id="audit-count">0 records</span></div><div class="table-wrap"><table><thead><tr><th>TIME</th><th>EVENT TYPE</th><th>EVENT ID</th><th>INTEGRITY</th><th>DETAIL</th></tr></thead><tbody id="audit-table"><tr><td colspan="5" class="empty-state">No audit events yet.</td></tr></tbody></table></div></section></section>
+
+      <section class="view" id="view-privacy"><div class="page-intro"><div><p class="eyebrow">GOVERNANCE / DATA PROTECTION</p><h2>Privacy center</h2><p class="muted">Understand exactly what this prototype stores and what it deliberately does not retain.</p></div><span class="privacy-shield">◇ PRIVATE BY DEFAULT</span></div><div class="privacy-grid"><section class="panel privacy-main"><div class="privacy-status"><span class="shield-icon">✓</span><div><p class="eyebrow">PROCESSING STATUS</p><h3>Temporary audio processing</h3><p class="muted">Uploaded and microphone audio is decoded, analyzed, and deleted from temporary storage after the request completes.</p></div></div><div class="privacy-rows"><div><span>Raw audio retained</span><b class="good">NO</b></div><div><span>Temporary files deleted</span><b class="good">YES</b></div><div><span>Speaker verification</span><b>NOT INSTALLED</b></div><div><span>Current retention setting</span><b id="privacy-retention">—</b></div></div></section><section class="panel"><p class="eyebrow">AUDIT & LOGGING</p><h3>Feature-only records</h3><p class="muted">Analysis metadata, scores, actions, and integrity hashes are stored locally for this demonstration. Raw audio is not placed in the audit trail.</p><div class="privacy-meter"><span style="width:72%"></span></div><div class="privacy-caption"><span>Privacy mode active</span><b id="privacy-audit-status">Checking…</b></div></section></div></section>
+
+      <section class="view" id="view-settings"><div class="page-intro"><div><p class="eyebrow">GOVERNANCE / CONFIGURATION</p><h2>Settings</h2><p class="muted">Tune contextual security policy. Trained model behavior and its feature shape are fixed.</p></div><span class="truth-tag">MODEL PARAMETERS LOCKED</span></div><form id="settings-form" class="settings-grid"><section class="panel"><div class="panel-heading"><div><p class="eyebrow">DETECTION POLICY</p><h3>Risk thresholds</h3></div></div><label class="setting-row"><span><b>Medium threshold</b><small>Security risk score at which monitoring begins</small></span><input type="number" name="medium_threshold" min="0" max="99"></label><label class="setting-row"><span><b>High threshold</b><small>Security risk score requiring escalation</small></span><input type="number" name="high_threshold" min="1" max="100"></label><label class="setting-row"><span><b>Escalation threshold</b><small>Recommended block threshold</small></span><input type="number" name="escalation_threshold" min="1" max="100"></label><div class="locked-setting"><span>Analysis window</span><b>3 seconds / 1 second hop</b></div><div class="locked-setting"><span>Feature shape</span><b>128 mel × 65 steps</b></div><button class="primary-button compact" type="submit">Save settings</button><span id="settings-saved" class="saved-note"></span></section><section class="panel"><p class="eyebrow">SECURITY & PRIVACY POLICY</p><h3>Recommended controls</h3><label class="setting-row"><span><b>Identity verification on high risk</b><small>Recommend independent verification</small></span><input type="checkbox" class="switch-input" name="verification_required"></label><label class="setting-row"><span><b>Delete raw audio after analysis</b><small>Prototype default; do not retain recordings</small></span><input type="checkbox" class="switch-input" name="audio_retention" checked disabled></label><label class="setting-row"><span><b>Anonymized audit logging</b><small>Redact filenames from audit details</small></span><input type="checkbox" class="switch-input" name="anonymized_logging"></label><div class="settings-callout">Settings change contextual security logic only. They do not retrain or alter the V2/V4 TensorFlow models.</div></section><section class="panel system-panel"><p class="eyebrow">SYSTEM</p><h3>Runtime health</h3><div class="system-line"><span>TensorFlow / Keras</span><b id="settings-tf">Checking</b></div><div class="system-line"><span>V2 model</span><b id="settings-v2">Checking</b></div><div class="system-line"><span>V4 model</span><b id="settings-v4">Checking</b></div><div class="system-line"><span>Application</span><b class="good">ONLINE</b></div></section></form></section>
     </main>
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
-  </body>
+  </div>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
 </html>

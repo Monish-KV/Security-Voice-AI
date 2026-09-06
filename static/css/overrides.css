@@ -1,0 +1,12 @@
+.table-status{display:inline-block;padding:4px 6px;border:1px solid rgba(145,180,204,.15);border-radius:3px;font:8px "DM Mono",monospace;letter-spacing:.06em}
+.table-status.low{color:#5ee7d2;border-color:rgba(94,231,210,.28)}
+.table-status.medium{color:#ffb86a;border-color:rgba(255,184,106,.3)}
+.table-status.high{color:#ff7e85;border-color:rgba(255,126,133,.3)}
+@media print{
+  .sidebar,.topbar,.page-intro,.result-foot .text-button{display:none!important}
+  .main-content{width:100%;margin:0;padding:0}
+  .view{display:none!important}
+  #view-analysis{display:block!important;padding:0}
+  #result-panel{display:block!important;border:0;box-shadow:none}
+  body{background:#fff;color:#111}
+}
