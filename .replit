@@ -1,5 +1,6 @@
 [deployment]
-run = "python app.py"
+run = ["python3", "app.py"]
+deploymentTarget = "autoscale"
 
 modules = ["python-3.12", "web", "nodejs-20"]
 [nix]
