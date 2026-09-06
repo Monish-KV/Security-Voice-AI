@@ -1,0 +1,837 @@
+We are continuing the EXISTING VoiceShield AI project. DO NOT rebuild the project from scratch and DO NOT replace the current architecture.
+
+Repository:
+https://github.com/Monish-KV/Security-Voice-AI
+
+IMPORTANT:
+The current V2/V4 trained voice-deepfake models and working real model.predict() inference are the most important part of the project. Preserve them.
+
+Before changing anything:
+1. Inspect the entire existing repository.
+2. Inspect app.py, storage.py, frontend files, requirements.txt, models/, README.md and current API routes.
+3. Understand the existing implementation and reuse it.
+4. Do not delete or replace working functionality.
+5. Do not substitute the trained ML models with heuristics, random values, filename checks, hashes, keyword tricks, or fake scores.
+6. Do not fabricate accuracy or performance statistics.
+7. Make all changes directly in the existing project.
+8. Keep the existing V2 and V4 .keras files unchanged unless absolutely necessary.
+9. At the end, run a complete end-to-end test.
+
+CURRENT PROJECT GOAL:
+Turn the existing VoiceShield AI prototype into a strong SIH 2026 demonstration of:
+
+AI-Powered Real-Time Detection and Prevention of Voice Cloning Impersonation Attacks
+
+Problem Statement ID: SIH26104
+Theme: Blockchain & Cybersecurity
+
+The product should demonstrate:
+
+VOICE DETECTION
+→ CONTEXTUAL RISK ANALYSIS
+→ EXPLAINABLE EVIDENCE
+→ SECURITY DECISION
+→ STEP-UP VERIFICATION
+→ INCIDENT / AUDIT RECORD
+
+Do NOT claim that the prototype is a production banking/telecom system.
+
+
+==================================================
+1. PRESERVE AND VERIFY THE ML PIPELINE
+==================================================
+
+The current trained models are:
+
+models/audio_deepfake_v2.keras
+models/audio_deepfake_v4.keras
+
+Keep both.
+
+Verify at startup:
+- model files exist
+- models load successfully
+- expected input shape is correct
+- TensorFlow/Keras versions are compatible
+- model.predict() actually executes
+
+The health/status endpoint should honestly report:
+
+trained_models_loaded: true/false
+v2_loaded: true/false
+v4_loaded: true/false
+
+Never report true when a model is unavailable.
+
+For every prediction:
+- extract scalar output safely
+- reject NaN
+- reject Infinity
+- reject missing values
+- reject invalid model output
+
+If inference fails:
+DO NOT create a fake score.
+
+Return:
+
+VOICE ANALYSIS UNAVAILABLE
+Manual verification required.
+
+The frontend must never display:
+NaN
+undefined
+Infinity
+fake 0/100
+fake 50/100
+or any invented confidence value.
+
+
+==================================================
+2. AUDIO PROCESSING
+==================================================
+
+Preserve the existing audio pipeline.
+
+Support common formats where already implemented:
+- WAV
+- MP3
+- M4A
+- OGG
+- FLAC
+- WebM if practical
+
+Convert input to:
+- mono
+- 16 kHz
+
+Use the existing model-compatible preprocessing.
+
+Preserve:
+- 3-second windows
+- 1-second hop
+- 128-bin Mel representation
+- model-compatible dimensions
+
+Do NOT alter preprocessing merely to make demo scores look better.
+
+
+==================================================
+3. MODEL SCORE VS SECURITY RISK SCORE
+==================================================
+
+Keep these as TWO DIFFERENT concepts.
+
+A. MODEL DEEPFAKE SCORE
+This is the score produced from V2/V4 model inference.
+
+B. SECURITY RISK SCORE
+This combines the model result with contextual security signals.
+
+The UI must clearly distinguish:
+
+MODEL DEEPFAKE SCORE
+from
+SECURITY RISK SCORE
+
+Do not call the model output "accuracy".
+
+Do not call the model score a calibrated probability unless calibration has actually been performed.
+
+Prefer wording such as:
+
+Model Deepfake Score: 13/100
+
+rather than:
+
+13% probability
+
+unless the implementation genuinely supports calibrated probability.
+
+
+==================================================
+4. V2 + V4 ENSEMBLE
+==================================================
+
+Preserve the current V2/V4 ensemble.
+
+Show:
+- V2 result
+- V4 result
+- ensemble/model score
+
+Make the calculation transparent.
+
+If the current implementation uses:
+
+ensemble = (V2 + V4) / 2
+
+keep that unless there is a technically justified reason to change it.
+
+Do not invent additional models.
+
+V5 is NOT currently available, so do not claim V5 is loaded.
+
+
+==================================================
+5. CONTEXTUAL SECURITY RISK ENGINE
+==================================================
+
+Strengthen the existing context workflow.
+
+Allow the user to provide:
+
+Caller:
+- Known caller
+- Unknown caller
+
+Interaction:
+- First-time interaction
+- Previous interaction
+
+Request type:
+- Normal request
+- Sensitive request
+
+Transaction:
+- Normal value
+- High-value transaction
+
+Previous history:
+- No previous high-risk interaction
+- Previous high-risk interaction
+
+
+Also include social-engineering indicators:
+
+- Urgent payment request
+- Credential request
+- Secrecy / pressure
+- Authority claim
+- Verification bypass
+- Payment-detail change
+
+The system should combine these with the model score to produce:
+
+LOW
+MEDIUM
+HIGH
+
+Security decisions:
+
+ALLOW
+MONITOR
+VERIFY
+ESCALATE
+BLOCK
+
+Make the reasoning visible.
+
+Example:
+
+Security Risk Score: 82/100
+Decision: ESCALATE
+
+Why?
+• Unknown caller
+• High-value transaction
+• Urgent payment request
+• Voice model indicates elevated deepfake risk
+
+Recommended action:
+Verify caller using a trusted callback and require secondary authorization.
+
+
+==================================================
+6. DO NOT OVERSTATE "BLOCK"
+==================================================
+
+IMPORTANT:
+
+VoiceShield AI is a security intelligence/protection layer.
+
+It should NOT pretend to actually:
+- block a bank transaction
+- access a bank account
+- call a customer
+- control a telecom network
+- execute MFA
+- access a company's internal systems
+
+Instead, show:
+
+RECOMMENDED ACTION:
+BLOCK / VERIFY / ESCALATE
+
+and clearly indicate that it is a security recommendation/demo workflow.
+
+For high-impact actions:
+
+VERIFY
+→ trusted callback
+→ MFA
+→ supervisor approval
+
+The prototype should demonstrate the decision workflow without pretending to execute external banking operations.
+
+
+==================================================
+7. REAL-TIME / LIVE MODE
+==================================================
+
+Keep the existing microphone/live analysis feature if it works.
+
+Make it clear that this is a prototype demonstration.
+
+If true streaming inference is not implemented, do NOT claim "continuous real-time production inference".
+
+Use wording such as:
+
+Near-real-time voice analysis prototype
+
+or
+
+Live microphone analysis prototype
+
+If audio chunks are analyzed, show:
+- current risk
+- latest model score
+- status
+- timeline
+
+Do not fabricate streaming latency numbers.
+
+
+==================================================
+8. EXPLAINABILITY / "WHY WAS THIS FLAGGED?"
+==================================================
+
+Add or improve a clear evidence panel.
+
+For every analysis show:
+
+WHY WAS THIS FLAGGED?
+
+Model Evidence:
+- V2 score
+- V4 score
+- ensemble score
+- temporal/audio evidence if already available
+
+Context Evidence:
+- caller status
+- interaction history
+- transaction sensitivity
+- transaction value category
+
+Social Engineering Evidence:
+- urgency
+- credential request
+- authority claim
+- secrecy
+- verification bypass
+- payment-detail change
+
+Then show:
+
+Recommended Action
+
+This should be understandable to a non-technical SIH judge.
+
+
+==================================================
+9. ANALYSIS RESULT PAGE
+==================================================
+
+Make the main result page polished and easy to understand.
+
+It should show:
+
+VOICE ANALYSIS
+
+Audio:
+[filename]
+
+Analysis ID:
+[ID]
+
+Model Deepfake Score:
+XX / 100
+
+Security Risk Score:
+XX / 100
+
+Risk Level:
+LOW / MEDIUM / HIGH
+
+Decision:
+ALLOW / MONITOR / VERIFY / ESCALATE / BLOCK
+
+Then:
+
+MODEL OUTPUT
+V2: XX
+V4: XX
+Ensemble: XX
+
+WHY THIS RESULT?
+[explainable evidence]
+
+SECURITY RECOMMENDATION
+[action]
+
+TIMELINE
+[existing timeline if available]
+
+
+==================================================
+10. INCIDENT MANAGEMENT
+==================================================
+
+Implement or finish an Incidents section.
+
+Each incident should contain:
+
+Incident ID
+Analysis ID
+Timestamp
+Severity
+Risk score
+Decision
+Reason
+Status
+
+Possible status:
+
+OPEN
+UNDER REVIEW
+RESOLVED
+
+Allow the user to open an incident and see its evidence.
+
+Do not create fake incidents automatically unless they originate from actual analyses.
+
+If seed/demo data is necessary for UI demonstration, label it explicitly as DEMO DATA.
+
+
+==================================================
+11. AUDIT TRAIL
+==================================================
+
+Preserve the existing SHA-256 tamper-evident audit chain.
+
+The audit section should show:
+
+- timestamp
+- event ID
+- analysis ID
+- event type
+- risk
+- decision
+- hash
+- previous hash if applicable
+
+Provide:
+
+VERIFY AUDIT INTEGRITY
+
+The result should clearly say whether the chain is valid.
+
+Do not claim this is blockchain.
+
+It is a tamper-evident hash-chain audit mechanism.
+
+
+==================================================
+12. PRIVACY
+==================================================
+
+Keep the privacy section.
+
+Clearly communicate:
+
+- raw audio should not be retained unnecessarily
+- analysis should minimize data retention
+- derived results can be stored for audit purposes
+- privacy-preserving processing is preferred
+- access controls are required for production deployment
+
+Do not claim legal/privacy compliance unless actually implemented.
+
+
+==================================================
+13. DETECTION EVALUATION
+==================================================
+
+This is IMPORTANT for SIH credibility.
+
+Add a "Detection Evaluation" section.
+
+Do NOT fabricate metrics.
+
+The system should support a labeled evaluation dataset containing:
+
+REAL
+FAKE
+
+For each sample, calculate when sufficient labeled data is available:
+
+TP
+TN
+FP
+FN
+
+and:
+
+Accuracy
+Precision
+Recall
+F1 Score
+ROC-AUC
+
+If there is no dataset available yet, display:
+
+EVALUATION DATASET NOT CONFIGURED
+
+and explain:
+
+"Formal evaluation requires a labeled REAL vs SYNTHETIC dataset."
+
+Do NOT display fake 95%, 98%, 99% accuracy.
+
+Also provide a simple CSV format for future evaluation:
+
+filename,label
+
+example:
+real_001.wav,REAL
+fake_001.wav,FAKE
+
+Do not include invented results.
+
+
+==================================================
+14. TESTING
+==================================================
+
+Create/maintain a proper test workflow.
+
+At minimum verify:
+
+1. Real speech WAV
+2. Real speech OGG/M4A
+3. Unsupported/corrupted audio
+4. Very short audio
+5. Silent audio
+6. Model unavailable scenario
+7. Context-only risk calculation
+8. High-risk transaction scenario
+9. Audit chain verification
+10. Incident creation
+
+Important:
+
+A real person's voice being classified as suspicious does NOT automatically prove the detector is wrong.
+
+The system must be evaluated against labeled data.
+
+Do not hard-code known recordings as REAL or FAKE just to improve the demo.
+
+
+==================================================
+15. ERROR HANDLING
+==================================================
+
+Never allow these to appear in the UI:
+
+NaN
+undefined
+null score
+Infinity
+fake confidence
+
+For every failure, show a meaningful message.
+
+Examples:
+
+INVALID AUDIO
+VOICE ANALYSIS UNAVAILABLE
+MODEL UNAVAILABLE
+INSUFFICIENT SPEECH
+UNSUPPORTED FORMAT
+MANUAL VERIFICATION REQUIRED
+
+
+==================================================
+16. UI / UX
+==================================================
+
+Keep ONE user-facing application.
+
+Do not create separate admin and user applications.
+
+Navigation should be approximately:
+
+Dashboard
+Voice Analysis
+Transaction Protection
+Incidents
+Audit Trail
+Privacy
+Settings
+
+The design should look like a serious cybersecurity/SOC product.
+
+Use:
+- clean layout
+- professional typography
+- clear risk indicators
+- evidence panels
+- readable tables
+- consistent spacing
+- responsive design
+
+Avoid:
+- childish graphics
+- excessive animations
+- fake futuristic AI effects
+- unnecessary gradients
+- gaming-style UI
+
+The application should be understandable within 30 seconds by an SIH judge.
+
+
+==================================================
+17. DASHBOARD
+==================================================
+
+Dashboard should summarize REAL application data.
+
+Show:
+
+Latest Analysis
+Current Risk
+Risk Level
+Decision
+Recent Incidents
+Audit Integrity
+Model Status
+
+If there are no analyses:
+
+NO ANALYSES YET
+
+Do not fabricate statistics.
+
+
+==================================================
+18. SECURITY DECISION WORKFLOW
+==================================================
+
+Demonstrate the complete flow:
+
+Incoming Voice
+↓
+AI Voice Analysis
+↓
+Model Deepfake Score
+↓
+Context Analysis
+↓
+Security Risk Score
+↓
+Explain Why
+↓
+Security Decision
+↓
+Step-Up Verification
+↓
+Incident / Audit Record
+
+
+==================================================
+19. API QUALITY
+==================================================
+
+Preserve existing useful APIs.
+
+Verify and document endpoints such as:
+
+/health
+/predict
+/api/events
+/api/audit/verify
+/api/privacy
+/api/settings
+/api/security-action
+
+Make sure:
+- JSON responses are consistent
+- errors have useful messages
+- numeric values are finite
+- no frontend/backend field-name mismatch exists
+
+Test every endpoint after modifications.
+
+
+==================================================
+20. README
+==================================================
+
+Update README.md so a judge/developer can understand:
+
+Project:
+VoiceShield AI
+
+Problem:
+SIH26104
+
+Architecture
+ML pipeline
+V2/V4 models
+Audio preprocessing
+Contextual risk engine
+Security decision engine
+Audit chain
+Privacy approach
+Evaluation methodology
+API overview
+How to run
+Known limitations
+
+IMPORTANT:
+
+Explicitly state:
+
+"The prototype does not claim production-level detection accuracy. Formal evaluation requires a labeled dataset containing genuine and synthetic/converted speech."
+
+Also clearly state:
+
+- no banking integration
+- no telecom interception
+- no real transaction execution
+- no production authentication system
+- speaker verification is not claimed as fully implemented unless a real speaker-verification model is installed
+
+
+==================================================
+21. SECURITY / DATA SAFETY
+==================================================
+
+Do not expose secrets.
+
+Do not hard-code API keys.
+
+Do not commit credentials.
+
+Review .gitignore.
+
+Do not add unnecessary external services.
+
+Keep the trained models inside models/.
+
+
+==================================================
+22. GITHUB / PROJECT INTEGRITY
+==================================================
+
+Before finishing:
+
+Check git diff.
+
+Ensure no trained model was accidentally deleted.
+
+Ensure requirements.txt is correct.
+
+Ensure the application starts cleanly.
+
+Ensure no debug-only fake data remains.
+
+Ensure no old heuristic detector remains anywhere as the primary detection method.
+
+Search the entire repository for:
+
+Math.random
+random score
+spoof filename detection
+fake confidence
+hardcoded accuracy
+heuristic deepfake prediction
+
+If any such code is being used as the actual ML detection result, remove it or isolate it as clearly labeled demo/test functionality.
+
+
+==================================================
+23. FINAL END-TO-END DEMO TEST
+==================================================
+
+Run the complete application.
+
+Test with an actual voice recording.
+
+Confirm:
+
+Upload
+→ preprocessing
+→ V2 inference
+→ V4 inference
+→ ensemble
+→ contextual risk
+→ decision
+→ explanation
+→ incident/audit
+
+The final UI must show finite values.
+
+No:
+NaN
+undefined
+fake scores
+broken fields
+missing analysis IDs
+
+
+==================================================
+24. MOST IMPORTANT RULE
+==================================================
+
+DO NOT optimize the detector to produce a desired result.
+
+Do not modify model outputs because:
+- a real voice was flagged
+- an AI-like voice was classified as real
+- a demo needs a particular score
+
+The model output must come from the trained V2/V4 models.
+
+The contextual security layer may increase risk based on explicitly selected security conditions, but it must be transparent about why.
+
+
+==================================================
+25. FINAL RESPONSE AFTER IMPLEMENTATION
+==================================================
+
+After completing everything, report:
+
+1. Files changed
+2. Features completed
+3. V2 model status
+4. V4 model status
+5. Actual inference test result
+6. API test result
+7. Audit verification result
+8. Evaluation section status
+9. Any remaining limitations
+10. Git commit hash
+
+Do not simply say "done".
+
+Give a concise technical completion report.
+
+MOST IMPORTANT:
+This is an existing working project. MODIFY AND COMPLETE IT.
+DO NOT REBUILD IT.
+DO NOT REMOVE THE TRAINED MODELS.
+DO NOT REPLACE ML INFERENCE WITH HEURISTICS.
+DO NOT FABRICATE PERFORMANCE.
+DO NOT BREAK THE EXISTING WORKING FEATURES.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import csv
 import logging
 import os
 import tempfile
@@ -28,6 +29,8 @@ HOP_SECONDS = 1
 N_MELS = 128
 MAX_TIME_STEPS = 65
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+EVALUATION_MANIFEST = BASE_DIR / "data" / "evaluation.csv"
+EVALUATION_LABELS = {"REAL", "FAKE"}
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
@@ -336,6 +339,125 @@ def analyze_audio(audio: np.ndarray, context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _safe_evaluation_path(filename: str) -> Path:
+    candidate = (BASE_DIR / filename).resolve()
+    if not candidate.is_relative_to(BASE_DIR):
+        raise ValueError("Evaluation sample must stay inside the project directory.")
+    return candidate
+
+
+def evaluate_dataset() -> dict[str, Any]:
+    """Evaluate only the labeled audio files that are actually available.
+
+    The manifest is deliberately opt-in. An absent or empty manifest is a
+    truthful "not configured" state rather than a fabricated benchmark.
+    """
+    response: dict[str, Any] = {
+        "configured": False,
+        "manifest": "data/evaluation.csv",
+        "format": "filename,label",
+        "labels": sorted(EVALUATION_LABELS),
+        "sample_count": 0,
+        "evaluated_count": 0,
+        "skipped_count": 0,
+        "metrics": None,
+        "confusion_matrix": {"true_positive": 0, "true_negative": 0, "false_positive": 0, "false_negative": 0},
+        "errors": [],
+        "message": "Formal evaluation requires a labeled REAL vs SYNTHETIC dataset.",
+    }
+    if not EVALUATION_MANIFEST.is_file():
+        return response
+    response["configured"] = True
+    rows: list[dict[str, str]] = []
+    try:
+        with EVALUATION_MANIFEST.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames != ["filename", "label"]:
+                response["errors"] = ["Manifest must contain exactly these columns: filename,label."]
+                return response
+            for row in reader:
+                filename = str(row.get("filename", "")).strip()
+                label = str(row.get("label", "")).strip().upper()
+                if not filename or label not in EVALUATION_LABELS:
+                    response["errors"].append(
+                        f"Skipped invalid row: filename must be present and label must be REAL or FAKE."
+                    )
+                    continue
+                rows.append({"filename": filename, "label": label})
+    except (OSError, UnicodeError, csv.Error) as exc:
+        response["errors"] = [f"Could not read evaluation manifest: {exc}"]
+        return response
+
+    response["sample_count"] = len(rows)
+    if not rows:
+        response["message"] = "Evaluation manifest is present but contains no valid labeled samples."
+        return response
+    if not all(MODELS.values()) or librosa is None:
+        response["errors"].append("Evaluation unavailable: both trained models and Librosa must be loaded.")
+        response["skipped_count"] = len(rows)
+        return response
+
+    evaluated: list[tuple[str, float, str]] = []
+    for row in rows:
+        try:
+            sample_path = _safe_evaluation_path(row["filename"])
+            if not sample_path.is_file():
+                raise FileNotFoundError(f"Sample not found: {row['filename']}")
+            audio, _ = librosa.load(sample_path, sr=SAMPLE_RATE, mono=True)
+            valid, validation = audio_validation_status(audio)
+            if not valid:
+                raise ValueError(validation["message"])
+            result = analyze_audio(audio, context_from_request({}))
+            score = require_finite_number(result["model_score"], "model score", minimum=0, maximum=100)
+            evaluated.append((row["label"], score, row["filename"]))
+        except Exception as exc:
+            response["errors"].append(f"{row['filename']}: {exc}")
+
+    response["evaluated_count"] = len(evaluated)
+    response["skipped_count"] = len(rows) - len(evaluated)
+    if not evaluated:
+        response["message"] = "No labeled samples could be evaluated."
+        return response
+
+    matrix = {"true_positive": 0, "true_negative": 0, "false_positive": 0, "false_negative": 0}
+    for label, score, _filename in evaluated:
+        predicted = "FAKE" if score >= 50 else "REAL"
+        if label == "FAKE" and predicted == "FAKE":
+            matrix["true_positive"] += 1
+        elif label == "REAL" and predicted == "REAL":
+            matrix["true_negative"] += 1
+        elif label == "REAL":
+            matrix["false_positive"] += 1
+        else:
+            matrix["false_negative"] += 1
+    total = len(evaluated)
+    tp, tn = matrix["true_positive"], matrix["true_negative"]
+    fp, fn = matrix["false_positive"], matrix["false_negative"]
+    positive = tp + fn
+    predicted_positive = tp + fp
+    precision = tp / predicted_positive if predicted_positive else None
+    recall = tp / positive if positive else None
+    f1 = (2 * precision * recall / (precision + recall)) if precision is not None and recall is not None and precision + recall else None
+    positives = [(score, label) for label, score, _filename in evaluated if label == "FAKE"]
+    negatives = [(score, label) for label, score, _filename in evaluated if label == "REAL"]
+    roc_auc = None
+    if positives and negatives:
+        wins = sum(1 if positive_score > negative_score else 0.5 if positive_score == negative_score else 0
+                   for positive_score, _ in positives for negative_score, _ in negatives)
+        roc_auc = wins / (len(positives) * len(negatives))
+    response["confusion_matrix"] = matrix
+    response["metrics"] = {
+        "accuracy": (tp + tn) / total,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "roc_auc": roc_auc,
+        "decision_threshold": 50,
+    }
+    response["message"] = "Metrics calculated from real model outputs and the labeled manifest."
+    return response
+
+
 @app.after_request
 def security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -351,10 +473,15 @@ def index():
 
 @app.get("/health")
 def health():
+    v2_loaded = MODELS["v2"] is not None
+    v4_loaded = MODELS["v4"] is not None
     return jsonify({
         "status": "online",
         "tensorflow_available": tf is not None,
         "keras_available": tf is not None,
+        "trained_models_loaded": v2_loaded and v4_loaded,
+        "v2_loaded": v2_loaded,
+        "v4_loaded": v4_loaded,
         "models": {
             version: {
                 "loaded": MODELS[version] is not None,
@@ -487,6 +614,11 @@ def api_privacy():
         "audit_event_count": verification["checked"],
         "speaker_verification_available": False,
     })
+
+
+@app.get("/api/evaluation")
+def api_evaluation():
+    return jsonify({"success": True, "evaluation": evaluate_dataset()})
 
 
 @app.post("/api/security-action")

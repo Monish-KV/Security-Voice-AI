@@ -81,6 +81,27 @@ privacy status. Optional multipart context fields include `caller_type`,
 - `GET /api/audit/verify` — verify the audit hash chain
 - `GET /api/privacy` — privacy and retention status
 - `POST /api/security-action` — record an analyst action
+- `GET /api/evaluation` — report truthful labeled-dataset evaluation status and metrics
+
+### Detection evaluation
+
+Formal evaluation is intentionally opt-in and never displays invented accuracy.
+To evaluate the real V2 + V4 ensemble, place labeled audio files inside the
+project and create `data/evaluation.csv` with exactly these columns:
+
+```csv
+filename,label
+evaluation_audio/real_001.wav,REAL
+evaluation_audio/fake_001.wav,FAKE
+```
+
+Labels must be `REAL` or `FAKE`. The endpoint processes only files that exist
+and pass the same audio validation and model inference pipeline as `/predict`.
+It reports evaluated/skipped samples, TP/TN/FP/FN, accuracy, precision, recall,
+F1, and ROC-AUC when both classes are present. A missing or empty dataset is
+shown as **EVALUATION DATASET NOT CONFIGURED** rather than producing a
+benchmark claim. The ensemble decision threshold used for these metrics is
+50/100; this is an evaluation threshold, not a calibrated probability.
 
 ## Development notes
 
@@ -95,3 +116,6 @@ privacy status. Optional multipart context fields include `caller_type`,
   placed in audit records.
 - The prototype has no authentication, payments, blockchain, telecom
   interception, banking integration, or production deployment controls.
+- Formal detection evaluation requires a labeled dataset containing genuine and
+  synthetic/converted speech; no accuracy or performance statistic is claimed
+  until that dataset is configured.

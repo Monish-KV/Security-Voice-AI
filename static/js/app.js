@@ -9,6 +9,7 @@ const pageMeta = {
   incidents: ["CASE MANAGEMENT", "Incident center"],
   audit: ["GOVERNANCE", "Audit trail"],
   privacy: ["GOVERNANCE", "Privacy center"],
+  evaluation: ["GOVERNANCE", "Detection evaluation"],
   settings: ["GOVERNANCE", "Settings"],
 };
 
@@ -31,6 +32,7 @@ function setView(view) {
   if (view === "incidents") loadIncidents();
   if (view === "audit") loadAudit();
   if (view === "privacy") loadPrivacy();
+  if (view === "evaluation") loadEvaluation();
   if (view === "settings") loadSettings();
 }
 
@@ -293,6 +295,48 @@ async function loadPrivacy() {
     $("#privacy-audit-status").textContent = data.audit_chain_valid ? "CHAIN VALID" : "CHECK REQUIRED";
   } catch (error) { $("#privacy-audit-status").textContent = "UNAVAILABLE"; }
 }
+
+function evaluationMetric(value) {
+  return value === null || value === undefined ? "—" : `${(finiteNumber(value, "evaluation metric") * 100).toFixed(1)}%`;
+}
+
+function renderEvaluation(evaluation) {
+  const configured = Boolean(evaluation.configured);
+  const evaluated = Number(evaluation.evaluated_count || 0);
+  $("#evaluation-title").textContent = !configured ? "Evaluation dataset not configured" : evaluated ? "Evaluation dataset processed" : "Evaluation dataset needs attention";
+  $("#evaluation-message").textContent = evaluation.message;
+  $("#evaluation-count").textContent = `${evaluated} evaluated · ${Number(evaluation.skipped_count || 0)} skipped`;
+  const metrics = evaluation.metrics;
+  $("#evaluation-metrics").innerHTML = metrics ? [
+    ["Accuracy", metrics.accuracy],
+    ["Precision", metrics.precision],
+    ["Recall", metrics.recall],
+    ["F1 score", metrics.f1],
+    ["ROC-AUC", metrics.roc_auc],
+  ].map(([label, value]) => `<div class="metric-tile"><span>${label}</span><b>${evaluationMetric(value)}</b></div>`).join("") :
+    '<div class="empty-state">Evaluation metrics will appear after a labeled dataset is configured.</div>';
+  const matrix = evaluation.confusion_matrix || {};
+  [["true_positive", "TRUE POSITIVE"], ["true_negative", "TRUE NEGATIVE"], ["false_positive", "FALSE POSITIVE"], ["false_negative", "FALSE NEGATIVE"]].forEach(([key, label]) => {
+    const tile = $(`#evaluation-matrix div:nth-child(${["true_positive", "true_negative", "false_positive", "false_negative"].indexOf(key) + 1})`);
+    tile.querySelector("span").textContent = label;
+    tile.querySelector("b").textContent = configured ? String(matrix[key] ?? 0) : "—";
+  });
+  const errors = (evaluation.errors || []).map((error) => escapeHtml(error)).join("<br>");
+  $("#evaluation-errors").innerHTML = errors;
+  $("#evaluation-errors").classList.toggle("hidden", !errors);
+}
+
+async function loadEvaluation() {
+  try {
+    const data = await api("/api/evaluation");
+    renderEvaluation(data.evaluation || {});
+  } catch (error) {
+    $("#evaluation-title").textContent = "Evaluation unavailable";
+    $("#evaluation-message").textContent = error.message;
+  }
+}
+
+$("#refresh-evaluation").addEventListener("click", loadEvaluation);
 
 async function loadSettings() {
   try {

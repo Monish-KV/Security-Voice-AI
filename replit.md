@@ -37,6 +37,14 @@ speaker-verification model is available.
 Local JSON/JSONL state is stored in `data/` for incidents, settings, and the
 tamper-evident audit trail. Raw audio is deleted after each analysis.
 
+## Detection evaluation
+
+The dashboard’s Detection evaluation section is unconfigured until a real
+labeled dataset is supplied. Add `data/evaluation.csv` with `filename,label`
+rows using `REAL` or `FAKE`, and keep the referenced audio files inside the
+project. `GET /api/evaluation` runs the same V2/V4 preprocessing and inference
+pipeline, reports skipped files explicitly, and never fabricates metrics.
+
 ## Useful checks
 
 ```bash
