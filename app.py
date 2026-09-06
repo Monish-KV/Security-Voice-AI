@@ -132,7 +132,7 @@ def audio_to_features(segment: np.ndarray) -> np.ndarray:
     return mel_db[np.newaxis, ..., np.newaxis].astype(np.float32)
 
 
-def model_predict(version: str, batch: np.ndarray) -> float:
+def model_predict(version: str, batch: np.ndarray) -> dict[str, float]:
     model = MODELS.get(version)
     if model is None:
         raise RuntimeError(MODEL_ERRORS[version] or f"{version.upper()} model is unavailable.")
@@ -150,7 +150,47 @@ def model_predict(version: str, batch: np.ndarray) -> float:
         raise RuntimeError(f"{version.upper()} returned an invalid probability.")
     # The supplied models are trained to emit real-voice probability. The
     # security score is the complementary deepfake probability.
-    return 1.0 - real_probability
+    deepfake_probability = 1.0 - real_probability
+    if not np.isfinite(deepfake_probability) or not 0 <= deepfake_probability <= 1:
+        raise RuntimeError(f"{version.upper()} produced an invalid deepfake probability.")
+    return {
+        "real_voice_probability": real_probability,
+        "deepfake_probability": deepfake_probability,
+    }
+
+
+def require_finite_number(value: Any, field_name: str, *, minimum: float | None = None, maximum: float | None = None) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Prediction response field '{field_name}' is not numeric.") from exc
+    if not np.isfinite(number):
+        raise RuntimeError(f"Prediction response field '{field_name}' is not finite.")
+    if minimum is not None and number < minimum:
+        raise RuntimeError(f"Prediction response field '{field_name}' is below {minimum}.")
+    if maximum is not None and number > maximum:
+        raise RuntimeError(f"Prediction response field '{field_name}' is above {maximum}.")
+    return number
+
+
+def validate_prediction_result(result: dict[str, Any]) -> None:
+    probability_fields = (
+        "v2_real_voice_probability",
+        "v2_deepfake_probability",
+        "v4_real_voice_probability",
+        "v4_deepfake_probability",
+    )
+    percentage_fields = ("v2_score", "v4_score", "ensemble_score", "model_score")
+    for field_name in probability_fields:
+        require_finite_number(result.get(field_name), field_name, minimum=0, maximum=1)
+    for field_name in percentage_fields:
+        require_finite_number(result.get(field_name), field_name, minimum=0, maximum=100)
+    require_finite_number(result.get("duration_seconds"), "duration_seconds", minimum=0)
+    require_finite_number(result.get("processing_time_ms"), "processing_time_ms", minimum=0)
+    security = result.get("security")
+    if not isinstance(security, dict):
+        raise RuntimeError("Prediction response is missing the security result.")
+    require_finite_number(security.get("security_risk_score"), "security.security_risk_score", minimum=0, maximum=100)
 
 
 def risk_level(score: float, settings: dict[str, Any]) -> str:
@@ -240,11 +280,19 @@ def assess_security(model_score: float, context: dict[str, Any], settings: dict[
 def analyze_audio(audio: np.ndarray, context: dict[str, Any]) -> dict[str, Any]:
     settings = storage.load_settings()
     timeline = []
+    v2_real_probabilities, v2_deepfake_probabilities = [], []
+    v4_real_probabilities, v4_deepfake_probabilities = [], []
     v2_scores, v4_scores, ensemble_scores = [], [], []
     for start_sample, segment in split_segments(audio):
         batch = audio_to_features(segment)
-        v2_score = model_predict("v2", batch) * 100
-        v4_score = model_predict("v4", batch) * 100
+        v2_prediction = model_predict("v2", batch)
+        v4_prediction = model_predict("v4", batch)
+        v2_real_probabilities.append(v2_prediction["real_voice_probability"])
+        v2_deepfake_probabilities.append(v2_prediction["deepfake_probability"])
+        v4_real_probabilities.append(v4_prediction["real_voice_probability"])
+        v4_deepfake_probabilities.append(v4_prediction["deepfake_probability"])
+        v2_score = v2_prediction["deepfake_probability"] * 100
+        v4_score = v4_prediction["deepfake_probability"] * 100
         ensemble = (v2_score + v4_score) / 2
         v2_scores.append(v2_score)
         v4_scores.append(v4_score)
@@ -263,6 +311,10 @@ def analyze_audio(audio: np.ndarray, context: dict[str, Any]) -> dict[str, Any]:
     return {
         "analysis_id": f"AN-{uuid.uuid4().hex[:10].upper()}",
         "duration_seconds": round(len(audio) / SAMPLE_RATE, 2),
+        "v2_real_voice_probability": round(float(np.mean(v2_real_probabilities)), 6),
+        "v2_deepfake_probability": round(float(np.mean(v2_deepfake_probabilities)), 6),
+        "v4_real_voice_probability": round(float(np.mean(v4_real_probabilities)), 6),
+        "v4_deepfake_probability": round(float(np.mean(v4_deepfake_probabilities)), 6),
         "v2_score": round(float(np.mean(v2_scores)), 2),
         "v4_score": round(float(np.mean(v4_scores)), 2),
         "ensemble_score": round(model_score, 2),
@@ -348,6 +400,7 @@ def predict():
         result["filename"] = filename
         result["audio_validation"] = {"valid": True, **validation}
         result["processing_time_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        validate_prediction_result(result)
         audit = storage.append_audit("ANALYSIS_PERFORMED", {
             "analysis_id": result["analysis_id"],
             "filename": filename if not storage.load_settings()["anonymized_logging"] else "redacted",

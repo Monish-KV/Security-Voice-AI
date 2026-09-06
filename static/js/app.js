@@ -148,24 +148,40 @@ function showError(message) {
   $("#error-panel").classList.remove("hidden");
 }
 
+function finiteNumber(value, fieldName) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new Error(`Analysis response contains an invalid ${fieldName}.`);
+  return number;
+}
+
 function renderTimeline(items) {
-  $("#timeline").innerHTML = (items || []).map((item) => `<div class="timeline-item ${item.status === "HIGH" ? "high" : ""}"><b>${escapeHtml(item.status)}</b><small>${item.start_seconds}s–${item.end_seconds}s<br>${item.ensemble_score.toFixed(1)}% model</small></div>`).join("") || '<div class="empty-state">No timeline segments.</div>';
+  $("#timeline").innerHTML = (items || []).map((item) => {
+    const start = finiteNumber(item.start_seconds, "timeline start");
+    const end = finiteNumber(item.end_seconds, "timeline end");
+    const ensemble = finiteNumber(item.ensemble_score, "timeline ensemble score");
+    return `<div class="timeline-item ${item.status === "HIGH" ? "high" : ""}"><b>${escapeHtml(item.status)}</b><small>${start}s–${end}s<br>${ensemble.toFixed(1)}% model</small></div>`;
+  }).join("") || '<div class="empty-state">No timeline segments.</div>';
 }
 
 function renderResult(result) {
+  if (!result || !result.security) throw new Error("Analysis response is missing the result payload.");
   state.result = result;
-  const model = Number(result.model_score);
-  const security = Number(result.security.security_risk_score);
+  const model = finiteNumber(result.model_score, "ensemble score");
+  const security = finiteNumber(result.security.security_risk_score, "security risk score");
+  const v2 = finiteNumber(result.v2_score, "V2 prediction");
+  const v4 = finiteNumber(result.v4_score, "V4 prediction");
+  const duration = finiteNumber(result.duration_seconds, "duration");
+  const processing = finiteNumber(result.processing_time_ms, "processing time");
   const risk = result.security.risk_level;
   $("#result-file-title").textContent = result.filename;
   $("#result-id").textContent = result.analysis_id;
   $("#ensemble-score").textContent = model.toFixed(1);
   $("#security-score").textContent = security.toFixed(1);
-  $("#v2-score").textContent = `${result.v2_score.toFixed(1)}%`;
-  $("#v4-score").textContent = `${result.v4_score.toFixed(1)}%`;
-  $("#result-time").textContent = `${result.processing_time_ms}ms`;
+  $("#v2-score").textContent = `${v2.toFixed(1)}%`;
+  $("#v4-score").textContent = `${v4.toFixed(1)}%`;
+  $("#result-time").textContent = `${processing.toFixed(2)}ms`;
   $("#result-filename").textContent = result.filename;
-  $("#result-duration").textContent = `${result.duration_seconds}s`;
+  $("#result-duration").textContent = `${duration.toFixed(2)}s`;
   $("#score-fill").style.width = `${model}%`;
   $("#security-fill").style.width = `${security}%`;
   $("#risk-label").textContent = risk;
@@ -203,6 +219,7 @@ $("#analysis-form").addEventListener("submit", async (event) => {
   Object.entries(context).forEach(([key, value]) => body.append(key, Array.isArray(value) ? JSON.stringify(value) : value));
   try {
     const data = await api("/predict", { method: "POST", body });
+    if (!data.result) throw new Error("Analysis response did not include a result payload.");
     renderResult(data.result);
     await loadEvents();
   } catch (error) {
@@ -311,7 +328,7 @@ async function analyzeLiveChunk(blob, sequence) {
   try {
     const data = await api("/predict", { method: "POST", body });
     const result = data.result;
-    const score = result.security.security_risk_score;
+    const score = finiteNumber(result?.security?.security_risk_score, "live security risk score");
     $("#live-score").textContent = `${score.toFixed(1)}%`;
     $("#live-fill").style.width = `${score}%`;
     $("#live-events").insertAdjacentHTML("afterbegin", `<div class="live-event"><span>Chunk ${sequence} · ${result.security.risk_level}</span><b>${score.toFixed(1)}% security risk</b></div>`);
