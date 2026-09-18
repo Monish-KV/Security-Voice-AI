@@ -248,11 +248,36 @@ app.use((req, res, next) => {
 // Serve static files
 app.use('/static', express.static(path.join(__dirname, 'static')));
 
-// Serve index.html
+function getFormattedDashboardDate(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    weekday: 'long',
+    month: 'long',
+    day: '2-digit',
+    year: 'numeric',
+  }).formatToParts(date);
+
+  const get = (type) => parts.find((p) => p.type === type)?.value || '';
+  const weekday = get('weekday').toUpperCase();
+  const month = get('month').toUpperCase();
+  const day = get('day');
+  const year = get('year');
+
+  return `${weekday} · ${month} ${day}, ${year}`;
+}
+
+// Serve index.html with programmatically generated current date
 app.get('/', (req, res) => {
   const indexPath = path.join(__dirname, 'templates', 'index.html');
   if (fs.existsSync(indexPath)) {
-    res.sendFile(indexPath);
+    const html = fs.readFileSync(indexPath, 'utf-8');
+    const dynamicDate = getFormattedDashboardDate();
+    const rendered = html.replace(
+      '<p class="eyebrow" id="dashboard-date"></p>',
+      `<p class="eyebrow" id="dashboard-date">${dynamicDate}</p>`
+    );
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(rendered);
   } else {
     res.status(404).send('Template not found');
   }

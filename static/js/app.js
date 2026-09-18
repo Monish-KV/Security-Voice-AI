@@ -13,13 +13,61 @@ const pageMeta = {
   settings: ["GOVERNANCE", "Settings"],
 };
 
+const TIMEZONE = "Asia/Kolkata";
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[character]));
 }
 
+function getFormattedDashboardDate(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TIMEZONE,
+    weekday: "long",
+    month: "long",
+    day: "2-digit",
+    year: "numeric",
+  }).formatToParts(date);
+
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+  const weekday = get("weekday").toUpperCase();
+  const month = get("month").toUpperCase();
+  const day = get("day");
+  const year = get("year");
+
+  return `${weekday} · ${month} ${day}, ${year}`;
+}
+
+function getFormattedCurrentTime(date = new Date()) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  }).format(date);
+}
+
+function updateDashboardDateTime() {
+  const dateEl = $("#dashboard-date") || $(".welcome-row .eyebrow");
+  if (dateEl) {
+    dateEl.textContent = getFormattedDashboardDate();
+  }
+  const clockEls = $$(".current-time, #current-time, #dashboard-clock");
+  if (clockEls.length > 0) {
+    const timeStr = getFormattedCurrentTime();
+    clockEls.forEach((el) => { el.textContent = timeStr; });
+  }
+}
+
 function formatTime(value) {
   if (!value) return "—";
-  return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return new Date(value).toLocaleString("en-US", {
+    timeZone: TIMEZONE,
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function setView(view) {
@@ -401,7 +449,14 @@ $("#live-stop").addEventListener("click", () => {
   $("#live-status").textContent = "Capture stopped"; $("#live-substatus").textContent = "Start again to analyze new chunks.";
 });
 
-$$("[data-action='refresh']").forEach((button) => button.addEventListener("click", async () => { await loadHealth(); await loadEvents(); await loadIncidents(); }));
+$$("[data-action='refresh']").forEach((button) => button.addEventListener("click", async () => {
+  updateDashboardDateTime();
+  await loadHealth();
+  await loadEvents();
+  await loadIncidents();
+}));
 const initialView = location.hash.replace("#", "");
 setView(pageMeta[initialView] ? initialView : "dashboard");
+updateDashboardDateTime();
+setInterval(updateDashboardDateTime, 1000);
 loadHealth(); loadEvents(); loadIncidents();
