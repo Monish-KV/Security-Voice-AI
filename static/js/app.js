@@ -970,10 +970,12 @@ function renderResult(
     result.timeline
   );
 
-  $("#result-panel")
+    $("#result-panel")
     .classList.remove(
       "hidden"
     );
+
+  renderEvaluationAction();
 
   $("#result-panel")
     .scrollIntoView({
