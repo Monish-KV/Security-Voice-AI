@@ -167,26 +167,38 @@ async function callMLServicePredict(audioBuffer, ext) {
         });
 
         res.on('end', () => {
+          console.log(
+            `[ML] /predict responded status=${res.statusCode} bytes=${body.length}`
+          );
+
+          let data;
+
           try {
-            const data = JSON.parse(body);
-
-            if (res.statusCode >= 400) {
-              return reject(
-                new Error(
-                  data.error ||
-                    `ML Service returned HTTP ${res.statusCode}`
-                )
-              );
-            }
-
-            resolve(data);
+            data = JSON.parse(body);
           } catch (e) {
-            reject(
+            console.error(
+              `[ML] Non-JSON response from ML service (status ${res.statusCode}):`,
+              body.slice(0, 300)
+            );
+
+            return reject(
               new Error(
-                `Failed to parse ML response: ${body.slice(0, 150)}`
+                `ML service returned a non-JSON response (HTTP ${res.statusCode}). ` +
+                  `First bytes: ${body.slice(0, 150)}`
               )
             );
           }
+
+          if (res.statusCode >= 400) {
+            return reject(
+              new Error(
+                data.error ||
+                  `ML Service returned HTTP ${res.statusCode}`
+              )
+            );
+          }
+
+          resolve(data);
         });
       }
     );
@@ -1167,6 +1179,8 @@ app.post(
   async (req, res) => {
     const started = Date.now();
 
+    try {
+
     if (
       !req.file ||
       !req.file.buffer ||
@@ -1626,6 +1640,24 @@ app.post(
       success: true,
       result,
     });
+
+    } catch (err) {
+      console.error(
+        '[/predict] Unhandled error:',
+        err
+      );
+
+      if (!res.headersSent) {
+        return res.status(500).json({
+          success: false,
+          error: `INFERENCE FAILED: ${
+            err && err.message
+              ? err.message
+              : 'Unexpected server error during analysis.'
+          }`,
+        });
+      }
+    }
   }
 );
 
@@ -2224,6 +2256,46 @@ app.post(
     });
   }
 );
+
+/*
+|--------------------------------------------------------------------------
+| JSON-safe fallthrough handlers
+|--------------------------------------------------------------------------
+|
+| These guarantee every unmatched route and every uncaught error is
+| returned as valid JSON. The API contract must never emit an HTML error
+| page (which previously surfaced in the UI as "invalid JSON").
+*/
+
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: `Route not found: ${req.method} ${req.path}`,
+  });
+});
+
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error(
+    '[Express Error Handler]',
+    err
+  );
+
+  // Multer file-size / upload errors carry a `code` field.
+  const message =
+    err && err.code === 'LIMIT_FILE_SIZE'
+      ? 'INVALID AUDIO. File exceeds the 100 MB upload limit.'
+      : err && err.message
+      ? err.message
+      : 'Unexpected server error.';
+
+  if (!res.headersSent) {
+    res.status(err && err.status ? err.status : 500).json({
+      success: false,
+      error: message,
+    });
+  }
+});
 
 const PORT = 3000;
 
