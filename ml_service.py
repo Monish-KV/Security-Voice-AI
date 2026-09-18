@@ -1,1106 +1,1120 @@
-#!/usr/bin/env python3
-
 """
-VoiceShield AI - Model Inference Service
+VoiceShield AI — Python ML Inference Service
 
-Primary trained models:
-    models/audio_deepfake_v2.keras
-    models/audio_deepfake_v4.keras
+Responsibilities:
+- Load the trained V2 and V4 TensorFlow/Keras models.
+- Decode supported audio through ffmpeg.
+- Convert audio to 16 kHz mono.
+- Analyze audio in 3-second windows with 1-second hop.
+- Generate 128-bin Mel spectrogram features.
+- Run genuine model.predict() inference.
+- Convert the models' REAL-VOICE probability into DEEPFAKE score.
+- Return per-window evidence for explainability/evaluation.
 
-Important model semantics:
-    The trained models output REAL-VOICE probability.
-
-    Therefore:
-
-        deepfake_probability = 1 - real_voice_probability
-
-The application exposes the converted deepfake/spoof score to the
-security layer and frontend.
-
-Audio pipeline:
-    input audio
-        ↓
-    FFmpeg decode
-        ↓
-    16 kHz mono
-        ↓
-    3-second windows
-        ↓
-    1-second hop
-        ↓
-    128 Mel bins
-        ↓
-    65 time steps
-        ↓
-    V2 + V4 inference
-        ↓
-    50/50 ensemble
-
-This service runs locally on port 5001 and is called by server.js.
+IMPORTANT:
+- V2/V4 model outputs are treated as REAL-VOICE probabilities.
+- Deepfake score = 1 - REAL-VOICE probability.
+- No random/heuristic/fake model scores are generated.
+- Model agreement is a diagnostic signal, NOT accuracy or confidence.
 """
 
-import os
-import sys
+from __future__ import annotations
+
+import base64
+import io
 import json
-import time
-import errno
+import math
+import os
 import subprocess
-import traceback
-import urllib.request
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-
-# ---------------------------------------------------------------------------
-# SERVICE STARTUP
-# ---------------------------------------------------------------------------
-
-def is_service_already_running(port):
-    try:
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{port}/health"
-        )
-
-        with urllib.request.urlopen(
-            request,
-            timeout=1.0
-        ) as response:
-
-            return response.status == 200
-
-    except Exception:
-        return False
-
-
-TARGET_PORT = (
-    int(sys.argv[1])
-    if len(sys.argv) > 1
-    else 5001
-)
-
-
-if is_service_already_running(TARGET_PORT):
-
-    print(
-        f"[ML Service] Service is already active "
-        f"and healthy on port {TARGET_PORT}. "
-        f"Exiting cleanly."
-    )
-
-    sys.exit(0)
-
-
-# ---------------------------------------------------------------------------
-# NUMERICAL / ML IMPORTS
-# ---------------------------------------------------------------------------
-
-# Reduce TensorFlow console noise.
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-
-# Force Keras to use TensorFlow backend.
-os.environ["KERAS_BACKEND"] = "tensorflow"
-
+import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import scipy.signal
-from librosa.filters import mel as librosa_mel
-import keras
+import librosa
+import tensorflow as tf
+from tensorflow import keras
 
 
 # ---------------------------------------------------------------------------
-# MODEL PATHS
+# Configuration
 # ---------------------------------------------------------------------------
 
-BASE_DIR = os.path.dirname(
-    os.path.abspath(__file__)
-)
+HOST = "127.0.0.1"
+PORT = 5001
 
+SAMPLE_RATE = 16000
 
-MODEL_V2_PATH = os.path.join(
-    BASE_DIR,
-    "models",
-    "audio_deepfake_v2.keras"
-)
+WINDOW_SECONDS = 3.0
+HOP_SECONDS = 1.0
 
-
-MODEL_V4_PATH = os.path.join(
-    BASE_DIR,
-    "models",
-    "audio_deepfake_v4.keras"
-)
-
-
-# ---------------------------------------------------------------------------
-# LOAD MODELS
-# ---------------------------------------------------------------------------
-
-print(
-    f"[ML Service] Loading V2 from {MODEL_V2_PATH}..."
-)
-
-model_v2 = keras.models.load_model(
-    MODEL_V2_PATH
-)
-
-print(
-    "[ML Service] V2 loaded: "
-    f"input={model_v2.input_shape}, "
-    f"output={model_v2.output_shape}"
-)
-
-
-print(
-    f"[ML Service] Loading V4 from {MODEL_V4_PATH}..."
-)
-
-model_v4 = keras.models.load_model(
-    MODEL_V4_PATH
-)
-
-print(
-    "[ML Service] V4 loaded: "
-    f"input={model_v4.input_shape}, "
-    f"output={model_v4.output_shape}"
-)
-
-
-# ---------------------------------------------------------------------------
-# AUDIO CONFIGURATION
-# ---------------------------------------------------------------------------
-
-SR = 16000
-
-WINDOW_SECONDS = 3
-
-HOP_SECONDS = 1
+WINDOW_SAMPLES = int(SAMPLE_RATE * WINDOW_SECONDS)
+HOP_SAMPLES = int(SAMPLE_RATE * HOP_SECONDS)
 
 N_FFT = 1024
-
 HOP_LENGTH = 750
-
 N_MELS = 128
 
 MAX_TIME_STEPS = 65
 
-
-# ---------------------------------------------------------------------------
-# MEL FILTER BANK
-# ---------------------------------------------------------------------------
-
-MEL_FB = librosa_mel(
-    sr=SR,
-    n_fft=N_FFT,
-    n_mels=N_MELS
-)
+MODEL_V2_PATH = Path("models/audio_deepfake_v2.keras")
+MODEL_V4_PATH = Path("models/audio_deepfake_v4.keras")
 
 
 # ---------------------------------------------------------------------------
-# MODEL WARMUP
+# Global model state
 # ---------------------------------------------------------------------------
 
-_dummy = np.zeros(
-    (
-        1,
-        N_MELS,
-        MAX_TIME_STEPS,
-        1
-    ),
-    dtype=np.float32
-)
+model_v2 = None
+model_v4 = None
 
-
-model_v2.predict(
-    _dummy,
-    verbose=0
-)
-
-
-model_v4.predict(
-    _dummy,
-    verbose=0
-)
-
-
-print(
-    "[ML Service] Model warmup completed successfully."
-)
+model_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
-# AUDIO DECODING
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+def finite_float(
+    value: Any,
+    name: str,
+) -> float:
+    """
+    Convert a value to a finite float.
+
+    Raises ValueError instead of allowing NaN/Infinity
+    to enter the API response.
+    """
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{name} is not a valid numeric value."
+        )
+
+    if not math.isfinite(result):
+        raise ValueError(
+            f"{name} is not finite."
+        )
+
+    return result
+
+
+def clamp_probability(value: float) -> float:
+    """
+    Clamp a probability into [0, 1].
+
+    This does not create a score.
+    It only protects the API contract against tiny
+    numerical values outside the expected range.
+    """
+    value = finite_float(
+        value,
+        "probability",
+    )
+
+    return max(
+        0.0,
+        min(
+            1.0,
+            value,
+        ),
+    )
+
+
+def deepfake_score_from_real_probability(
+    real_probability: float,
+) -> float:
+    """
+    Convert model REAL-VOICE probability into
+    DEEPFAKE probability/score.
+
+    Example:
+        real = 0.80
+        deepfake = 0.20
+    """
+    real_probability = clamp_probability(
+        real_probability
+    )
+
+    return clamp_probability(
+        1.0 - real_probability
+    )
+
+
+def score_100(probability: float) -> float:
+    """
+    Convert probability [0,1] to score [0,100].
+    """
+    probability = clamp_probability(
+        probability
+    )
+
+    return probability * 100.0
+
+
+# ---------------------------------------------------------------------------
+# Model loading
+# ---------------------------------------------------------------------------
+
+def load_models() -> None:
+    """
+    Load the trained V2 and V4 Keras models.
+
+    The service must fail loudly if either trained model
+    cannot be loaded. It must never replace a missing model
+    with a heuristic or random implementation.
+    """
+    global model_v2
+    global model_v4
+
+    if not MODEL_V2_PATH.exists():
+        raise FileNotFoundError(
+            f"V2 model not found: {MODEL_V2_PATH}"
+        )
+
+    if not MODEL_V4_PATH.exists():
+        raise FileNotFoundError(
+            f"V4 model not found: {MODEL_V4_PATH}"
+        )
+
+    print(
+        f"[ML] Loading V2 model: {MODEL_V2_PATH}",
+        flush=True,
+    )
+
+    model_v2 = keras.models.load_model(
+        MODEL_V2_PATH,
+        compile=False,
+    )
+
+    print(
+        f"[ML] Loading V4 model: {MODEL_V4_PATH}",
+        flush=True,
+    )
+
+    model_v4 = keras.models.load_model(
+        MODEL_V4_PATH,
+        compile=False,
+    )
+
+    print(
+        f"[ML] V2 input shape: {model_v2.input_shape}",
+        flush=True,
+    )
+
+    print(
+        f"[ML] V4 input shape: {model_v4.input_shape}",
+        flush=True,
+    )
+
+    # Warm-up inference.
+    dummy = np.zeros(
+        (
+            1,
+            N_MELS,
+            MAX_TIME_STEPS,
+            1,
+        ),
+        dtype=np.float32,
+    )
+
+    with model_lock:
+        model_v2.predict(
+            dummy,
+            verbose=0,
+        )
+
+        model_v4.predict(
+            dummy,
+            verbose=0,
+        )
+
+    print(
+        "[ML] V2/V4 models loaded and warmed successfully.",
+        flush=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Audio decoding
 # ---------------------------------------------------------------------------
 
 def decode_audio(
-    audio_bytes,
-    ext="wav"
-):
+    audio_bytes: bytes,
+) -> np.ndarray:
     """
-    Decode arbitrary supported audio bytes into:
+    Decode arbitrary supported audio using ffmpeg.
 
-        16 kHz
-        mono
-        float32
-
-    FFmpeg performs the format conversion.
+    Output:
+        float32 mono waveform at 16 kHz.
     """
 
-    command = [
-        "ffmpeg",
-
-        "-v",
-        "error",
-
-        "-i",
-        "pipe:0",
-
-        "-ar",
-        str(SR),
-
-        "-ac",
-        "1",
-
-        "-f",
-        "f32le",
-
-        "pipe:1"
-    ]
-
-
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
-    )
-
-
-    output,
-    error = process.communicate(
-        input=audio_bytes
-    )
-
-
-    if (
-        process.returncode != 0
-        or len(output) == 0
-    ):
-
-        error_text = error.decode(
-            "utf-8",
-            errors="ignore"
+    if not audio_bytes:
+        raise ValueError(
+            "Audio payload is empty."
         )
 
+    process = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-ac",
+            "1",
+            "-ar",
+            str(SAMPLE_RATE),
+            "-f",
+            "f32le",
+            "pipe:1",
+        ],
+        input=audio_bytes,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    if process.returncode != 0:
+        error_message = (
+            process.stderr
+            .decode(
+                "utf-8",
+                errors="replace",
+            )
+            .strip()
+        )
 
         raise ValueError(
-            "FFmpeg failed to decode audio: "
-            + error_text
+            "Audio decoding failed"
+            + (
+                f": {error_message}"
+                if error_message
+                else "."
+            )
         )
 
+    if not process.stdout:
+        raise ValueError(
+            "Audio decoder returned no samples."
+        )
 
     audio = np.frombuffer(
-        output,
-        dtype=np.float32
+        process.stdout,
+        dtype=np.float32,
     )
 
+    if audio.size == 0:
+        raise ValueError(
+            "Decoded audio contains no samples."
+        )
 
-    # Remove NaN / infinite values from
-    # malformed input before ML processing.
     audio = np.nan_to_num(
         audio,
         nan=0.0,
         posinf=0.0,
-        neginf=0.0
+        neginf=0.0,
     )
 
+    if not np.any(
+        np.abs(audio) > 1e-8
+    ):
+        raise ValueError(
+            "Decoded audio contains no usable signal."
+        )
 
     return audio.astype(
-        np.float32
+        np.float32,
+        copy=False,
     )
 
 
 # ---------------------------------------------------------------------------
-# FEATURE EXTRACTION
+# Audio preprocessing
 # ---------------------------------------------------------------------------
 
-def extract_features(
-    audio_slice
-):
+def create_mel_features(
+    audio_window: np.ndarray,
+) -> np.ndarray:
     """
-    Convert one audio segment into:
+    Convert one 3-second audio window into the
+    model input representation.
 
+    Target shape:
         (128, 65, 1)
-
-    mel-spectrogram representation.
     """
 
-    target_samples = (
-        SR * WINDOW_SECONDS
+    audio_window = np.asarray(
+        audio_window,
+        dtype=np.float32,
     )
 
+    audio_window = np.nan_to_num(
+        audio_window,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
 
-    # Pad shorter recordings/windows.
-    if len(audio_slice) < target_samples:
-
-        audio_slice = np.pad(
-            audio_slice,
+    # Ensure exactly the expected window length.
+    if len(audio_window) < WINDOW_SAMPLES:
+        audio_window = np.pad(
+            audio_window,
             (
                 0,
-                target_samples
-                - len(audio_slice)
+                WINDOW_SAMPLES
+                - len(audio_window),
             ),
-            mode="constant"
+            mode="constant",
         )
 
-
-    # Truncate longer recordings/windows.
-    elif len(audio_slice) > target_samples:
-
-        audio_slice = audio_slice[
-            :target_samples
+    elif len(audio_window) > WINDOW_SAMPLES:
+        audio_window = audio_window[
+            :WINDOW_SAMPLES
         ]
 
-
-    # Protect against invalid numerical values.
-    audio_slice = np.nan_to_num(
-        audio_slice,
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0
+    # Mel spectrogram.
+    mel = librosa.feature.melspectrogram(
+        y=audio_window,
+        sr=SAMPLE_RATE,
+        n_fft=N_FFT,
+        hop_length=HOP_LENGTH,
+        n_mels=N_MELS,
+        power=2.0,
     )
 
-
-    # Keep waveform within normal audio range.
-    audio_slice = np.clip(
-        audio_slice,
-        -1.0,
-        1.0
+    # Convert to dB using the same general representation
+    # expected by the existing trained models.
+    mel_db = librosa.power_to_db(
+        mel,
+        ref=np.max,
     )
-
-
-    # -----------------------------------------------------------------------
-    # STFT
-    # -----------------------------------------------------------------------
-
-    frequencies,
-    times,
-    stft = scipy.signal.stft(
-        audio_slice,
-        fs=SR,
-        nperseg=N_FFT,
-        noverlap=N_FFT - HOP_LENGTH
-    )
-
-
-    power = (
-        np.abs(stft) ** 2
-    )
-
-
-    # -----------------------------------------------------------------------
-    # MEL SPECTROGRAM
-    # -----------------------------------------------------------------------
-
-    mel_spec = np.dot(
-        MEL_FB,
-        power
-    )
-
-
-    # -----------------------------------------------------------------------
-    # FORCE EXACTLY 65 TIME STEPS
-    # -----------------------------------------------------------------------
-
-    if mel_spec.shape[1] > MAX_TIME_STEPS:
-
-        mel_spec = mel_spec[
-            :,
-            :MAX_TIME_STEPS
-        ]
-
-
-    elif mel_spec.shape[1] < MAX_TIME_STEPS:
-
-        mel_spec = np.pad(
-            mel_spec,
-            (
-                (
-                    0,
-                    0
-                ),
-                (
-                    0,
-                    MAX_TIME_STEPS
-                    - mel_spec.shape[1]
-                )
-            ),
-            mode="constant"
-        )
-
-
-    # -----------------------------------------------------------------------
-    # CONVERT TO dB
-    # -----------------------------------------------------------------------
-
-    mel_spec = np.nan_to_num(
-        mel_spec,
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0
-    )
-
-
-    reference = np.max(
-        mel_spec
-    )
-
-
-    safe_reference = max(
-        float(reference),
-        1e-10
-    )
-
-
-    mel_db = (
-        10.0
-        * np.log10(
-            np.maximum(
-                mel_spec,
-                1e-10
-            )
-        )
-        -
-        10.0
-        * np.log10(
-            safe_reference
-        )
-    )
-
 
     mel_db = np.nan_to_num(
         mel_db,
         nan=0.0,
         posinf=0.0,
-        neginf=0.0
+        neginf=0.0,
     )
 
+    # Models expect 65 time steps.
+    if mel_db.shape[1] < MAX_TIME_STEPS:
+        mel_db = np.pad(
+            mel_db,
+            (
+                (0, 0),
+                (
+                    0,
+                    MAX_TIME_STEPS
+                    - mel_db.shape[1],
+                ),
+            ),
+            mode="constant",
+        )
 
-    return mel_db[
-        :,
-        :,
-        np.newaxis
-    ].astype(
-        np.float32
+    elif mel_db.shape[1] > MAX_TIME_STEPS:
+        mel_db = mel_db[
+            :,
+            :MAX_TIME_STEPS,
+        ]
+
+    features = mel_db[
+        :N_MELS,
+        :MAX_TIME_STEPS,
+    ]
+
+    features = features.astype(
+        np.float32,
+        copy=False,
     )
+
+    if features.shape != (
+        N_MELS,
+        MAX_TIME_STEPS,
+    ):
+        raise ValueError(
+            "Generated Mel feature shape is "
+            f"{features.shape}, expected "
+            f"({N_MELS}, {MAX_TIME_STEPS})."
+        )
+
+    return features[
+        ...,
+        np.newaxis,
+    ]
 
 
 # ---------------------------------------------------------------------------
-# MODEL OUTPUT VALIDATION
+# Window generation
 # ---------------------------------------------------------------------------
 
-def extract_model_probability(
-    prediction,
-    model_name
-):
+def generate_windows(
+    audio: np.ndarray,
+) -> list[tuple[int, int, np.ndarray]]:
     """
-    Extract one scalar probability from a Keras prediction.
+    Split audio into overlapping 3-second windows
+    with a 1-second hop.
 
-    The model output is interpreted as:
-
-        REAL VOICE PROBABILITY
+    Returns:
+        [
+            (window_index, start_sample, window_audio),
+            ...
+        ]
     """
 
-    values = np.asarray(
-        prediction,
-        dtype=np.float64
-    ).reshape(-1)
+    total_samples = len(audio)
+
+    if total_samples <= 0:
+        raise ValueError(
+            "Audio contains no samples."
+        )
+
+    windows = []
+
+    # Short recordings still receive one padded window.
+    if total_samples <= WINDOW_SAMPLES:
+        padded = np.pad(
+            audio,
+            (
+                0,
+                WINDOW_SAMPLES
+                - total_samples,
+            ),
+            mode="constant",
+        )
+
+        windows.append(
+            (
+                0,
+                0,
+                padded,
+            )
+        )
+
+        return windows
+
+    start = 0
+    index = 0
+
+    while start < total_samples:
+        end = start + WINDOW_SAMPLES
+
+        window = audio[
+            start:end
+        ]
+
+        if len(window) < WINDOW_SAMPLES:
+            window = np.pad(
+                window,
+                (
+                    0,
+                    WINDOW_SAMPLES
+                    - len(window),
+                ),
+                mode="constant",
+            )
+
+        windows.append(
+            (
+                index,
+                start,
+                window,
+            )
+        )
+
+        index += 1
+        start += HOP_SAMPLES
+
+        # Do not create a final window that starts
+        # after the audio has already ended.
+        if start >= total_samples:
+            break
+
+    return windows
 
 
-    if len(values) == 0:
+# ---------------------------------------------------------------------------
+# Model prediction
+# ---------------------------------------------------------------------------
 
+def extract_scalar_prediction(
+    prediction: Any,
+    model_name: str,
+) -> float:
+    """
+    Safely extract a scalar model prediction.
+    """
+
+    array = np.asarray(
+        prediction
+    )
+
+    if array.size == 0:
         raise ValueError(
             f"{model_name} returned an empty prediction."
         )
 
+    value = array.reshape(-1)[0]
 
-    value = float(
-        values[0]
+    return clamp_probability(
+        finite_float(
+            value,
+            f"{model_name} prediction",
+        )
     )
 
 
-    if not np.isfinite(value):
+def predict_window(
+    features: np.ndarray,
+) -> tuple[float, float]:
+    """
+    Run genuine V2 and V4 model inference.
 
-        raise ValueError(
-            f"{model_name} returned a non-finite prediction."
+    Returns:
+        (v2_real_probability, v4_real_probability)
+    """
+
+    if model_v2 is None or model_v4 is None:
+        raise RuntimeError(
+            "Trained V2/V4 models are not loaded."
         )
 
+    batch = np.expand_dims(
+        features,
+        axis=0,
+    ).astype(
+        np.float32,
+        copy=False,
+    )
 
-    # Models producing probabilities should
-    # remain inside [0, 1].
-    if value < 0.0 or value > 1.0:
-
-        raise ValueError(
-            f"{model_name} returned an invalid probability: {value}"
+    with model_lock:
+        raw_v2 = model_v2.predict(
+            batch,
+            verbose=0,
         )
 
+        raw_v4 = model_v4.predict(
+            batch,
+            verbose=0,
+        )
 
-    return value
+    v2_real = extract_scalar_prediction(
+        raw_v2,
+        "V2",
+    )
+
+    v4_real = extract_scalar_prediction(
+        raw_v4,
+        "V4",
+    )
+
+    return (
+        v2_real,
+        v4_real,
+    )
 
 
 # ---------------------------------------------------------------------------
-# AUDIO ANALYSIS
+# Full audio analysis
 # ---------------------------------------------------------------------------
 
 def analyze_audio(
-    audio_bytes,
-    ext="wav"
-):
+    audio_bytes: bytes,
+) -> dict[str, Any]:
     """
-    Run complete V2 + V4 inference.
+    Analyze the complete recording.
 
-    IMPORTANT:
+    The overall model score is the average of the
+    per-window ensemble deepfake scores.
 
-    Keras output:
-        REAL probability
-
-    Converted score:
-        DEEPFAKE probability = 1 - REAL probability
+    Each window also retains:
+    - V2 real probability
+    - V2 deepfake score
+    - V4 real probability
+    - V4 deepfake score
+    - ensemble deepfake score
+    - start/end time
     """
-
-    started = time.time()
-
-
-    # -----------------------------------------------------------------------
-    # DECODE
-    # -----------------------------------------------------------------------
 
     audio = decode_audio(
-        audio_bytes,
-        ext
+        audio_bytes
     )
 
-
-    duration = (
-        float(len(audio))
-        / float(SR)
+    duration_seconds = (
+        len(audio)
+        / SAMPLE_RATE
     )
 
-
-    if duration < 0.3:
-
+    if not math.isfinite(
+        duration_seconds
+    ) or duration_seconds <= 0:
         raise ValueError(
-            "Audio recording is too short "
-            "(less than 0.3 seconds)."
+            "Audio duration is invalid."
         )
 
-
-    # -----------------------------------------------------------------------
-    # BASIC AUDIO QUALITY CHECK
-    # -----------------------------------------------------------------------
-
-    rms = float(
-        np.sqrt(
-            np.mean(
-                audio ** 2
-            )
-        )
+    windows = generate_windows(
+        audio
     )
 
+    window_results = []
 
-    if not np.isfinite(rms):
+    v2_deepfake_scores = []
+    v4_deepfake_scores = []
+    ensemble_scores = []
 
-        raise ValueError(
-            "Audio quality validation failed."
+    for (
+        window_index,
+        start_sample,
+        window_audio,
+    ) in windows:
+
+        features = create_mel_features(
+            window_audio
         )
 
-
-    if rms < 0.0001:
-
-        raise ValueError(
-            "INSUFFICIENT SPEECH: "
-            "Audio is completely silent or muted."
+        (
+            v2_real_probability,
+            v4_real_probability,
+        ) = predict_window(
+            features
         )
 
-
-    # -----------------------------------------------------------------------
-    # CREATE 3-SECOND WINDOWS
-    # -----------------------------------------------------------------------
-
-    window_samples = (
-        SR * WINDOW_SECONDS
-    )
-
-
-    hop_samples = (
-        SR * HOP_SECONDS
-    )
-
-
-    slices = []
-
-    starts = []
-
-    ends = []
-
-
-    if len(audio) <= window_samples:
-
-        slices.append(
-            extract_features(
-                audio
+        v2_deepfake_probability = (
+            deepfake_score_from_real_probability(
+                v2_real_probability
             )
         )
 
-
-        starts.append(
-            0.0
-        )
-
-
-        ends.append(
-            round(
-                duration,
-                2
+        v4_deepfake_probability = (
+            deepfake_score_from_real_probability(
+                v4_real_probability
             )
         )
 
+        ensemble_deepfake_probability = (
+            (
+                v2_deepfake_probability
+                + v4_deepfake_probability
+            )
+            / 2.0
+        )
+
+        v2_deepfake_score = score_100(
+            v2_deepfake_probability
+        )
+
+        v4_deepfake_score = score_100(
+            v4_deepfake_probability
+        )
+
+        ensemble_score = score_100(
+            ensemble_deepfake_probability
+        )
+
+        window_start_seconds = (
+            start_sample
+            / SAMPLE_RATE
+        )
+
+        window_end_seconds = min(
+            window_start_seconds
+            + WINDOW_SECONDS,
+            duration_seconds,
+        )
+
+        window_result = {
+            "window_index": int(
+                window_index
+            ),
+
+            "start_seconds": round(
+                float(
+                    window_start_seconds
+                ),
+                3,
+            ),
+
+            "end_seconds": round(
+                float(
+                    window_end_seconds
+                ),
+                3,
+            ),
+
+            # Model semantics are explicit.
+            "v2_real_voice_probability": round(
+                float(
+                    v2_real_probability
+                ),
+                6,
+            ),
+
+            "v2_deepfake_probability": round(
+                float(
+                    v2_deepfake_probability
+                ),
+                6,
+            ),
+
+            "v2_score": round(
+                float(
+                    v2_deepfake_score
+                ),
+                3,
+            ),
+
+            "v4_real_voice_probability": round(
+                float(
+                    v4_real_probability
+                ),
+                6,
+            ),
+
+            "v4_deepfake_probability": round(
+                float(
+                    v4_deepfake_probability
+                ),
+                6,
+            ),
+
+            "v4_score": round(
+                float(
+                    v4_deepfake_score
+                ),
+                3,
+            ),
+
+            "ensemble_deepfake_probability": round(
+                float(
+                    ensemble_deepfake_probability
+                ),
+                6,
+            ),
+
+            "ensemble_score": round(
+                float(
+                    ensemble_score
+                ),
+                3,
+            ),
+
+            "model_difference": round(
+                abs(
+                    v2_deepfake_score
+                    - v4_deepfake_score
+                ),
+                3,
+            ),
+        }
+
+        window_results.append(
+            window_result
+        )
+
+        v2_deepfake_scores.append(
+            v2_deepfake_score
+        )
+
+        v4_deepfake_scores.append(
+            v4_deepfake_score
+        )
+
+        ensemble_scores.append(
+            ensemble_score
+        )
+
+    if not window_results:
+        raise ValueError(
+            "No audio analysis windows were generated."
+        )
+
+    # Overall scores are averages across windows.
+    v2_score = float(
+        np.mean(
+            v2_deepfake_scores
+        )
+    )
+
+    v4_score = float(
+        np.mean(
+            v4_deepfake_scores
+        )
+    )
+
+    ensemble_score = float(
+        np.mean(
+            ensemble_scores
+        )
+    )
+
+    # Validate all aggregate values.
+    v2_score = finite_float(
+        v2_score,
+        "V2 score",
+    )
+
+    v4_score = finite_float(
+        v4_score,
+        "V4 score",
+    )
+
+    ensemble_score = finite_float(
+        ensemble_score,
+        "ensemble score",
+    )
+
+    # Find the highest-risk window.
+    peak_window = max(
+        window_results,
+        key=lambda item: item[
+            "ensemble_score"
+        ],
+    )
+
+    # Model agreement across the whole recording.
+    model_difference = abs(
+        v2_score - v4_score
+    )
+
+    if model_difference <= 10.0:
+        agreement_level = "HIGH"
+
+    elif model_difference <= 25.0:
+        agreement_level = "MODERATE"
 
     else:
-
-        for start_idx in range(
-            0,
-            len(audio)
-            - window_samples // 2,
-            hop_samples
-        ):
-
-            end_idx = min(
-                start_idx
-                + window_samples,
-                len(audio)
-            )
-
-
-            slice_data = audio[
-                start_idx:end_idx
-            ]
-
-
-            slices.append(
-                extract_features(
-                    slice_data
-                )
-            )
-
-
-            start_seconds = (
-                start_idx
-                / SR
-            )
-
-
-            end_seconds = min(
-                start_seconds
-                + WINDOW_SECONDS,
-                duration
-            )
-
-
-            starts.append(
-                round(
-                    start_seconds,
-                    2
-                )
-            )
-
-
-            ends.append(
-                round(
-                    end_seconds,
-                    2
-                )
-            )
-
-
-    if not slices:
-
-        raise ValueError(
-            "No usable analysis windows were created."
-        )
-
-
-    batch = np.stack(
-        slices,
-        axis=0
-    )
-
-
-    # -----------------------------------------------------------------------
-    # REAL MODEL INFERENCE
-    # -----------------------------------------------------------------------
-
-    raw_v2 = model_v2.predict(
-        batch,
-        verbose=0
-    )
-
-
-    raw_v4 = model_v4.predict(
-        batch,
-        verbose=0
-    )
-
-
-    preds_v2 = np.asarray(
-        raw_v2,
-        dtype=np.float64
-    ).reshape(-1)
-
-
-    preds_v4 = np.asarray(
-        raw_v4,
-        dtype=np.float64
-    ).reshape(-1)
-
-
-    if len(preds_v2) != len(slices):
-
-        raise ValueError(
-            "V2 prediction count does not match "
-            "the number of audio windows."
-        )
-
-
-    if len(preds_v4) != len(slices):
-
-        raise ValueError(
-            "V4 prediction count does not match "
-            "the number of audio windows."
-        )
-
-
-    # -----------------------------------------------------------------------
-    # CONVERT REAL PROBABILITY → DEEPFAKE PROBABILITY
-    # -----------------------------------------------------------------------
-
-    deepfake_v2 = []
-
-    deepfake_v4 = []
-
-
-    for value in preds_v2:
-
-        real_probability = (
-            extract_model_probability(
-                value,
-                "V2"
-            )
-        )
-
-
-        deepfake_probability = (
-            1.0
-            - real_probability
-        )
-
-
-        deepfake_v2.append(
-            deepfake_probability
-        )
-
-
-    for value in preds_v4:
-
-        real_probability = (
-            extract_model_probability(
-                value,
-                "V4"
-            )
-        )
-
-
-        deepfake_probability = (
-            1.0
-            - real_probability
-        )
-
-
-        deepfake_v4.append(
-            deepfake_probability
-        )
-
-
-    deepfake_v2 = np.asarray(
-        deepfake_v2,
-        dtype=np.float64
-    )
-
-
-    deepfake_v4 = np.asarray(
-        deepfake_v4,
-        dtype=np.float64
-    )
-
-
-    # -----------------------------------------------------------------------
-    # 50/50 ENSEMBLE
-    # -----------------------------------------------------------------------
-
-    ensemble_deepfake = (
-        0.50 * deepfake_v2
-        +
-        0.50 * deepfake_v4
-    )
-
-
-    # -----------------------------------------------------------------------
-    # TIMELINE
-    # -----------------------------------------------------------------------
-
-    timeline = []
-
-
-    for i in range(
-        len(slices)
-    ):
-
-        v2_score = (
-            float(
-                deepfake_v2[i]
-            )
-            * 100.0
-        )
-
-
-        v4_score = (
-            float(
-                deepfake_v4[i]
-            )
-            * 100.0
-        )
-
-
-        ensemble_score = (
-            float(
-                ensemble_deepfake[i]
-            )
-            * 100.0
-        )
-
-
-        if ensemble_score >= 70.0:
-
-            status = "HIGH"
-
-        elif ensemble_score >= 40.0:
-
-            status = "ELEVATED"
-
-        else:
-
-            status = "CLEAR"
-
-
-        timeline.append(
-            {
-                "start_seconds":
-                    starts[i],
-
-                "end_seconds":
-                    ends[i],
-
-                "v2_score":
-                    round(
-                        v2_score,
-                        2
-                    ),
-
-                "v4_score":
-                    round(
-                        v4_score,
-                        2
-                    ),
-
-                "ensemble_score":
-                    round(
-                        ensemble_score,
-                        2
-                    ),
-
-                "status":
-                    status,
-            }
-        )
-
-
-    # -----------------------------------------------------------------------
-    # OVERALL SCORES
-    # -----------------------------------------------------------------------
-
-    avg_v2_deepfake = float(
-        np.mean(
-            deepfake_v2
-        )
-    )
-
-
-    avg_v4_deepfake = float(
-        np.mean(
-            deepfake_v4
-        )
-    )
-
-
-    avg_v2_real = (
-        1.0
-        - avg_v2_deepfake
-    )
-
-
-    avg_v4_real = (
-        1.0
-        - avg_v4_deepfake
-    )
-
-
-    v2_score = round(
-        avg_v2_deepfake * 100.0,
-        2
-    )
-
-
-    v4_score = round(
-        avg_v4_deepfake * 100.0,
-        2
-    )
-
-
-    ensemble_score = round(
-        (
-            v2_score
-            + v4_score
-        )
-        / 2.0,
-        2
-    )
-
-
-    # -----------------------------------------------------------------------
-    # FINAL NUMERICAL SAFETY CHECK
-    # -----------------------------------------------------------------------
-
-    numeric_values = [
-        duration,
-        v2_score,
-        v4_score,
-        ensemble_score,
-        avg_v2_deepfake,
-        avg_v4_deepfake,
-        avg_v2_real,
-        avg_v4_real,
-    ]
-
-
-    if not all(
-        np.isfinite(value)
-        for value in numeric_values
-    ):
-
-        raise ValueError(
-            "Inference produced a non-finite value."
-        )
-
-
-    # -----------------------------------------------------------------------
-    # PROCESSING TIME
-    # -----------------------------------------------------------------------
-
-    process_time = round(
-        time.time() - started,
-        3
-    )
-
-
-    # -----------------------------------------------------------------------
-    # RETURN CONTRACT
-    # -----------------------------------------------------------------------
+        agreement_level = "LOW"
 
     return {
+        "success": True,
 
-        "duration_seconds":
-            round(
-                duration,
-                2
+        "duration_seconds": round(
+            float(
+                duration_seconds
             ),
+            3,
+        ),
 
-        # These are the scores consumed
-        # by server.js as DEEPFAKE scores.
-        "v2_score":
+        "sample_rate": SAMPLE_RATE,
+
+        "window_seconds": WINDOW_SECONDS,
+
+        "hop_seconds": HOP_SECONDS,
+
+        "windows_analyzed": len(
+            window_results
+        ),
+
+        # Overall deepfake scores.
+        "v2_score": round(
             v2_score,
+            3,
+        ),
 
-        "v4_score":
+        "v4_score": round(
             v4_score,
+            3,
+        ),
 
-        "ensemble_score":
+        "ensemble_score": round(
             ensemble_score,
+            3,
+        ),
 
+        # Explicit probabilities.
+        "v2_deepfake_probability": round(
+            v2_score / 100.0,
+            6,
+        ),
 
-        # Explicit semantic fields.
-        "v2_deepfake_probability":
-            round(
-                avg_v2_deepfake,
-                6
+        "v2_real_voice_probability": round(
+            1.0 - (v2_score / 100.0),
+            6,
+        ),
+
+        "v4_deepfake_probability": round(
+            v4_score / 100.0,
+            6,
+        ),
+
+        "v4_real_voice_probability": round(
+            1.0 - (v4_score / 100.0),
+            6,
+        ),
+
+        "ensemble_deepfake_probability": round(
+            ensemble_score / 100.0,
+            6,
+        ),
+
+        # Evidence.
+        "windows": window_results,
+
+        "peak_window": {
+            "window_index": peak_window[
+                "window_index"
+            ],
+
+            "start_seconds": peak_window[
+                "start_seconds"
+            ],
+
+            "end_seconds": peak_window[
+                "end_seconds"
+            ],
+
+            "ensemble_score": peak_window[
+                "ensemble_score"
+            ],
+
+            "v2_score": peak_window[
+                "v2_score"
+            ],
+
+            "v4_score": peak_window[
+                "v4_score"
+            ],
+        },
+
+        # Model agreement is only a consistency diagnostic.
+        "model_agreement": {
+            "difference_points": round(
+                model_difference,
+                3,
             ),
 
-        "v2_real_voice_probability":
-            round(
-                avg_v2_real,
-                6
+            "level": agreement_level,
+
+            "diagnostic_only": True,
+
+            "interpretation": (
+                "V2 and V4 produced closely aligned "
+                "outputs."
+                if agreement_level == "HIGH"
+                else
+                "V2 and V4 show some disagreement."
+                if agreement_level == "MODERATE"
+                else
+                "V2 and V4 show significant disagreement."
             ),
+        },
 
-        "v4_deepfake_probability":
-            round(
-                avg_v4_deepfake,
-                6
-            ),
+        "model_semantics": (
+            "V2 and V4 return REAL-VOICE "
+            "probability. Deepfake score is "
+            "computed as 1 - real-voice probability."
+        ),
 
-        "v4_real_voice_probability":
-            round(
-                avg_v4_real,
-                6
-            ),
+        "ensemble_method": (
+            "50/50 arithmetic mean of V2 and V4 "
+            "deepfake scores for each window, "
+            "then averaged across windows."
+        ),
 
-
-        "timeline":
-            timeline,
-
-
-        "processing_time":
-            process_time,
-
-
-        "inference_source":
-            "genuine_keras_models",
-
-
-        "model_semantics":
-            "V2 and V4 raw outputs represent real-voice probability; deepfake score is 1 minus the model output.",
-
-
-        "ensemble_method":
-            "50/50 arithmetic mean of V2 and V4 deepfake probabilities.",
-
-
-        "v2_model_path":
-            "models/audio_deepfake_v2.keras",
-
-
-        "v4_model_path":
-            "models/audio_deepfake_v4.keras",
-
+        "inference": {
+            "genuine_tensorflow_keras": True,
+            "model_predict_used": True,
+            "models": [
+                "audio_deepfake_v2.keras",
+                "audio_deepfake_v4.keras",
+            ],
+        },
     }
 
 
 # ---------------------------------------------------------------------------
-# HTTP REQUEST HANDLER
+# HTTP response helpers
+# ---------------------------------------------------------------------------
+
+def send_json(
+    handler: BaseHTTPRequestHandler,
+    status_code: int,
+    payload: dict[str, Any],
+) -> None:
+
+    encoded = json.dumps(
+        payload,
+        allow_nan=False,
+    ).encode(
+        "utf-8"
+    )
+
+    handler.send_response(
+        status_code
+    )
+
+    handler.send_header(
+        "Content-Type",
+        "application/json",
+    )
+
+    handler.send_header(
+        "Content-Length",
+        str(len(encoded)),
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Origin",
+        "*",
+    )
+
+    handler.end_headers()
+
+    handler.wfile.write(
+        encoded
+    )
+
+
+def read_json_body(
+    handler: BaseHTTPRequestHandler,
+) -> dict[str, Any]:
+
+    content_length = int(
+        handler.headers.get(
+            "Content-Length",
+            "0",
+        )
+    )
+
+    if content_length <= 0:
+        raise ValueError(
+            "Request body is empty."
+        )
+
+    body = handler.rfile.read(
+        content_length
+    )
+
+    try:
+        payload = json.loads(
+            body.decode(
+                "utf-8"
+            )
+        )
+
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"Invalid JSON body: {error}"
+        )
+
+    if not isinstance(
+        payload,
+        dict,
+    ):
+        raise ValueError(
+            "Request JSON must be an object."
+        )
+
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# HTTP server
 # ---------------------------------------------------------------------------
 
 class MLRequestHandler(
@@ -1109,350 +1123,280 @@ class MLRequestHandler(
 
     def log_message(
         self,
-        format,
-        *args
-    ):
+        format: str,
+        *args: Any,
+    ) -> None:
 
-        sys.stderr.write(
-            "[ML Service] "
-            + (
-                format % args
-            )
-            + "\n"
+        print(
+            f"[ML HTTP] {format % args}",
+            flush=True,
         )
 
-
-    # -----------------------------------------------------------------------
-    # HEALTH
-    # -----------------------------------------------------------------------
-
-    def do_GET(self):
-
-        if self.path == "/health":
-
-            self.send_response(
-                200
-            )
-
-
-            self.send_header(
-                "Content-Type",
-                "application/json"
-            )
-
-
-            self.end_headers()
-
-
-            payload = {
-
-                "status":
-                    "online",
-
-                "v2_loaded":
-                    True,
-
-                "v4_loaded":
-                    True,
-
-                "tensorflow_available":
-                    True,
-
-                "keras_available":
-                    True,
-
-                "v2_input_shape":
-                    list(
-                        model_v2.input_shape
-                    ),
-
-                "v4_input_shape":
-                    list(
-                        model_v4.input_shape
-                    ),
-
-                "model_semantics":
-                    "real_voice_probability",
-
-                "deepfake_score_formula":
-                    "1 - real_voice_probability",
-
-            }
-
-
-            self.wfile.write(
-                json.dumps(
-                    payload
-                ).encode(
-                    "utf-8"
-                )
-            )
-
-
-            return
-
+    def do_OPTIONS(self) -> None:
 
         self.send_response(
-            404
+            204
         )
 
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*",
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, POST, OPTIONS",
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type",
+        )
 
         self.end_headers()
 
+    def do_GET(self) -> None:
 
-    # -----------------------------------------------------------------------
-    # PREDICTION
-    # -----------------------------------------------------------------------
+        if self.path == "/health":
 
-    def do_POST(self):
+            send_json(
+                self,
+                200,
+                {
+                    "success": True,
+
+                    "service": "VoiceShield ML Service",
+
+                    "status": "healthy",
+
+                    "trained_models_loaded": (
+                        model_v2 is not None
+                        and model_v4 is not None
+                    ),
+
+                    "models": {
+                        "v2": model_v2 is not None,
+                        "v4": model_v4 is not None,
+                    },
+
+                    "model_semantics": (
+                        "Models return REAL-VOICE "
+                        "probability. Deepfake score = "
+                        "1 - REAL-VOICE probability."
+                    ),
+
+                    "model_predict_used": True,
+
+                    "sample_rate": SAMPLE_RATE,
+
+                    "window_seconds": WINDOW_SECONDS,
+
+                    "hop_seconds": HOP_SECONDS,
+
+                    "n_mels": N_MELS,
+
+                    "max_time_steps": MAX_TIME_STEPS,
+                },
+            )
+
+            return
+
+        send_json(
+            self,
+            404,
+            {
+                "success": False,
+                "error": "Not found.",
+            },
+        )
+
+    def do_POST(self) -> None:
 
         if self.path != "/predict":
 
-            self.send_response(
-                404
+            send_json(
+                self,
+                404,
+                {
+                    "success": False,
+                    "error": "Not found.",
+                },
             )
-
-
-            self.end_headers()
-
 
             return
 
-
         try:
+            payload = read_json_body(
+                self
+            )
 
-            content_length = int(
-                self.headers.get(
-                    "Content-Length",
-                    0
+            audio_base64 = payload.get(
+                "audio_base64"
+            )
+
+            if not isinstance(
+                audio_base64,
+                str,
+            ) or not audio_base64.strip():
+
+                raise ValueError(
+                    "audio_base64 is required."
                 )
-            )
 
-        except (
-            TypeError,
-            ValueError
-        ):
-
-            content_length = 0
-
-
-        if content_length <= 0:
-
-            self.send_response(
-                400
-            )
-
-
-            self.send_header(
-                "Content-Type",
-                "application/json"
-            )
-
-
-            self.end_headers()
-
-
-            self.wfile.write(
-                json.dumps(
-                    {
-                        "error":
-                            "Empty audio body."
-                    }
-                ).encode(
-                    "utf-8"
+            # Support a possible data-URL prefix.
+            if "," in audio_base64:
+                prefix, encoded_data = (
+                    audio_base64.split(
+                        ",",
+                        1,
+                    )
                 )
-            )
 
+                if prefix.startswith(
+                    "data:"
+                ):
+                    audio_base64 = (
+                        encoded_data
+                    )
 
-            return
+            try:
+                audio_bytes = base64.b64decode(
+                    audio_base64,
+                    validate=True,
+                )
 
-
-        ext = self.headers.get(
-            "X-Audio-Ext",
-            "wav"
-        ).lower()
-
-
-        audio_bytes = (
-            self.rfile.read(
-                content_length
-            )
-        )
-
-
-        try:
+            except Exception as error:
+                raise ValueError(
+                    f"Invalid base64 audio: {error}"
+                )
 
             result = analyze_audio(
-                audio_bytes,
-                ext
+                audio_bytes
             )
 
+            # Final API contract validation.
+            required_numeric_fields = [
+                "duration_seconds",
+                "v2_score",
+                "v4_score",
+                "ensemble_score",
+            ]
 
-            self.send_response(
-                200
-            )
-
-
-            self.send_header(
-                "Content-Type",
-                "application/json"
-            )
-
-
-            self.end_headers()
-
-
-            self.wfile.write(
-                json.dumps(
-                    result
-                ).encode(
-                    "utf-8"
+            for field in required_numeric_fields:
+                finite_float(
+                    result.get(field),
+                    field,
                 )
+
+            send_json(
+                self,
+                200,
+                result,
             )
 
+        except ValueError as error:
+
+            print(
+                f"[ML ERROR] {error}",
+                flush=True,
+            )
+
+            send_json(
+                self,
+                422,
+                {
+                    "success": False,
+
+                    "error": str(error),
+
+                    "analysis_available": False,
+                },
+            )
 
         except Exception as error:
 
-            error_message = str(
-                error
-            )
-
-
-            traceback.print_exc()
-
-
-            self.send_response(
-                422
-            )
-
-
-            self.send_header(
-                "Content-Type",
-                "application/json"
-            )
-
-
-            self.end_headers()
-
-
-            self.wfile.write(
-                json.dumps(
-                    {
-                        "error":
-                            error_message
-                    }
-                ).encode(
-                    "utf-8"
-                )
-            )
-
-
-# ---------------------------------------------------------------------------
-# REUSABLE HTTP SERVER
-# ---------------------------------------------------------------------------
-
-class ReusableHTTPServer(
-    HTTPServer
-):
-
-    allow_reuse_address = True
-
-
-# ---------------------------------------------------------------------------
-# SERVER START
-# ---------------------------------------------------------------------------
-
-def run_server(
-    port=5001
-):
-
-    server_address = (
-        "127.0.0.1",
-        port
-    )
-
-
-    try:
-
-        httpd = (
-            ReusableHTTPServer(
-                server_address,
-                MLRequestHandler
-            )
-        )
-
-
-    except OSError as error:
-
-        if (
-            error.errno
-            == errno.EADDRINUSE
-            or
-            "Address already in use"
-            in str(error)
-        ):
-
-            if is_service_already_running(
-                port
-            ):
-
-                print(
-                    "[ML Service] Port "
-                    f"{port} is already active "
-                    "with a healthy ML service. "
-                    "Exiting cleanly."
-                )
-
-                sys.exit(0)
-
-
             print(
-                "[ML Service] Port "
-                f"{port} is already in use. "
-                "Exiting cleanly."
+                f"[ML ERROR] Unexpected failure: {error}",
+                flush=True,
             )
 
-            sys.exit(0)
+            send_json(
+                self,
+                500,
+                {
+                    "success": False,
+
+                    "error": (
+                        "VOICE ANALYSIS UNAVAILABLE: "
+                        "trained-model inference failed."
+                    ),
+
+                    "analysis_available": False,
+
+                    "manual_verification_required": True,
+                },
+            )
 
 
-        raise
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
+def main() -> None:
 
     print(
-        "[ML Service] Serving genuine "
-        "V2/V4 inference on "
-        f"http://127.0.0.1:{port}"
+        "[ML] VoiceShield AI ML service starting...",
+        flush=True,
     )
 
+    print(
+        f"[ML] TensorFlow version: {tf.__version__}",
+        flush=True,
+    )
+
+    print(
+        f"[ML] Keras version: {keras.__version__}",
+        flush=True,
+    )
+
+    load_models()
+
+    server = HTTPServer(
+        (
+            HOST,
+            PORT,
+        ),
+        MLRequestHandler,
+    )
+
+    print(
+        f"[ML] Listening on http://{HOST}:{PORT}",
+        flush=True,
+    )
+
+    print(
+        "[ML] Genuine V2/V4 TensorFlow inference enabled.",
+        flush=True,
+    )
+
+    print(
+        "[ML] Per-window detection evidence enabled.",
+        flush=True,
+    )
 
     try:
-
-        httpd.serve_forever()
-
+        server.serve_forever()
 
     except KeyboardInterrupt:
 
         print(
-            "[ML Service] Shutting down."
+            "[ML] Shutting down...",
+            flush=True,
         )
 
+    finally:
+        server.server_close()
 
-        httpd.server_close()
-
-
-# ---------------------------------------------------------------------------
-# ENTRY POINT
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-
-    port = (
-        int(sys.argv[1])
-        if len(sys.argv) > 1
-        else 5001
-    )
-
-
-    run_server(
-        port
-    )
+    main()
