@@ -209,24 +209,28 @@ $$("[data-nav]").forEach(
     )
 );
 
-async function api(
-  url,
-  options = {}
-) {
-  const response =
-    await fetch(
-      url,
-      options
-    );
+async function api(url, options = {}) {
+  const response = await fetch(url, options);
 
-  const data =
-    await response
-      .json()
-      .catch(() => ({}));
+  const rawText = await response.text();
+
+  let data = {};
+
+  try {
+    data = rawText
+      ? JSON.parse(rawText)
+      : {};
+  } catch (error) {
+    throw new Error(
+      `Server returned invalid JSON (${response.status}).`
+    );
+  }
 
   if (!response.ok) {
     throw new Error(
       data.error ||
+        data.message ||
+        data?.result?.error ||
         `Request failed (${response.status})`
     );
   }
@@ -1070,27 +1074,58 @@ $("#analysis-form")
             }
           );
 
-        if (!data.result) {
+        /*
+         * VoiceShield backend normally returns:
+         *
+         * {
+         *   success: true,
+         *   result: {...}
+         * }
+         *
+         * Accept a few equivalent response wrappers
+         * so the UI does not fail if the hosting layer
+         * wraps the response.
+         */
+
+        const result =
+          data?.result ||
+          data?.data?.result ||
+          data?.analysis?.result ||
+          data?.data?.analysis ||
+          data?.analysis ||
+          null;
+
+        if (!result) {
+          console.error(
+            "[VoiceShield] Unexpected /predict response:",
+            data
+          );
+
           throw new Error(
-            "Analysis response did not include a result payload."
+            "Analysis completed, but the server response did not contain an analysis result."
           );
         }
 
-        renderResult(
-          data.result
-        );
+        renderResult(result);
 
         await loadEvents();
+
       } catch (error) {
-        showError(
-          error.message
+        console.error(
+          "[VoiceShield] Analysis failed:",
+          error
         );
+
+        showError(
+          error?.message ||
+            "Analysis failed unexpectedly."
+        );
+
       } finally {
         setLoading(false);
       }
     }
   );
-
 function clearError() {
   $("#error-panel")
     .classList.add(
