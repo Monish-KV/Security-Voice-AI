@@ -1191,16 +1191,19 @@ app.post(
       'wav';
 
     const allowed = [
-      'wav',
-      'mp3',
-      'm4a',
-      'aac',
-      'ogg',
-      'flac',
-      'webm',
-      'aiff',
-      'aif',
-    ];
+  'wav',
+  'mp3',
+  'm4a',
+  'aac',
+  'ogg',
+  'flac',
+  'webm',
+  'aiff',
+  'aif',
+  'mp4',
+  'mov',
+  'mkv',
+];
 
     if (!allowed.includes(ext)) {
       return res.status(400).json({
