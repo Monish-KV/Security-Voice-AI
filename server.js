@@ -309,6 +309,7 @@ function createIncident(payload) {
     recommended_action: payload.recommended_action || 'VERIFY',
     reason: payload.reason || 'High-risk voice analysis',
     analysis_id: payload.analysis_id || null,
+    transcript: payload.transcript || null,
     status: 'OPEN',
   };
 
