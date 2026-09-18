@@ -221,8 +221,15 @@ async function api(url, options = {}) {
       ? JSON.parse(rawText)
       : {};
   } catch (error) {
+    console.error(
+      "[VoiceShield] Invalid JSON response:",
+      rawText
+    );
+
     throw new Error(
-      `Server returned invalid JSON (${response.status}).`
+      `Server returned invalid JSON (${response.status}). Response: ${
+        rawText.slice(0, 300)
+      }`
     );
   }
 
@@ -237,7 +244,6 @@ async function api(url, options = {}) {
 
   return data;
 }
-
 function statusText(loaded) {
   return loaded
     ? "LOADED"
