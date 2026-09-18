@@ -3,6 +3,8 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import http from 'http';
+import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -41,6 +43,121 @@ function initializeStorage() {
 }
 
 initializeStorage();
+
+const ML_SERVICE_PORT = 5001;
+let mlServiceProcess = null;
+let isStartingMLService = false;
+
+function checkMLServiceHealth() {
+  return new Promise((resolve) => {
+    const req = http.get(
+      {
+        hostname: '127.0.0.1',
+        port: ML_SERVICE_PORT,
+        path: '/health',
+        timeout: 2000,
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (c) => {
+          body += c;
+        });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve(null);
+          }
+        });
+      }
+    );
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(null);
+    });
+  });
+}
+
+async function ensureMLService() {
+  if (isStartingMLService) {
+    return;
+  }
+  if (mlServiceProcess && !mlServiceProcess.killed) {
+    return;
+  }
+  const health = await checkMLServiceHealth();
+  if (health && health.status === 'online') {
+    return;
+  }
+
+  isStartingMLService = true;
+  const scriptPath = path.join(__dirname, 'ml_service.py');
+  if (fs.existsSync(scriptPath)) {
+    mlServiceProcess = spawn('python3', [scriptPath, String(ML_SERVICE_PORT)], {
+      stdio: ['ignore', 'inherit', 'inherit'],
+      detached: false,
+    });
+    mlServiceProcess.on('exit', (code, signal) => {
+      console.log(`[ML Service] Process exited (code: ${code}, signal: ${signal}).`);
+      mlServiceProcess = null;
+      isStartingMLService = false;
+    });
+    console.log(`[ML Service] Spawned python inference engine on port ${ML_SERVICE_PORT}`);
+  }
+  isStartingMLService = false;
+}
+
+// Start ML service if not already online
+ensureMLService();
+
+async function callMLServicePredict(audioBuffer, ext) {
+  await ensureMLService();
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: ML_SERVICE_PORT,
+        path: '/predict',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': audioBuffer.length,
+          'X-Audio-Ext': ext,
+        },
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          try {
+            const data = JSON.parse(body);
+            if (res.statusCode >= 400) {
+              return reject(new Error(data.error || `ML Service returned HTTP ${res.statusCode}`));
+            }
+            resolve(data);
+          } catch (e) {
+            reject(new Error(`Failed to parse ML response: ${body.slice(0, 150)}`));
+          }
+        });
+      }
+    );
+
+    req.on('error', (err) => {
+      reject(err);
+    });
+
+    req.setTimeout(30000, () => {
+      req.destroy();
+      reject(new Error('ML inference request timed out after 30s.'));
+    });
+
+    req.write(audioBuffer);
+    req.end();
+  });
+}
 
 function sortObject(obj) {
   if (obj === null || typeof obj !== 'object') return obj;
@@ -266,15 +383,39 @@ function getFormattedDashboardDate(date = new Date()) {
   return `${weekday} · ${month} ${day}, ${year}`;
 }
 
-// Serve index.html with programmatically generated current date
+function getGreeting(date = new Date()) {
+  const hour = parseInt(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Kolkata',
+      hour: 'numeric',
+      hourCycle: 'h23',
+    }).format(date),
+    10
+  );
+
+  if (hour >= 5 && hour < 12) {
+    return 'Good morning,';
+  } else if (hour >= 12 && hour < 17) {
+    return 'Good afternoon,';
+  } else {
+    return 'Good evening,';
+  }
+}
+
+// Serve index.html with programmatically generated current date and greeting
 app.get('/', (req, res) => {
   const indexPath = path.join(__dirname, 'templates', 'index.html');
   if (fs.existsSync(indexPath)) {
     const html = fs.readFileSync(indexPath, 'utf-8');
     const dynamicDate = getFormattedDashboardDate();
-    const rendered = html.replace(
+    const dynamicGreeting = getGreeting();
+    let rendered = html.replace(
       '<p class="eyebrow" id="dashboard-date"></p>',
       `<p class="eyebrow" id="dashboard-date">${dynamicDate}</p>`
+    );
+    rendered = rendered.replace(
+      '<h2 id="dashboard-greeting">Good morning, <span>analyst.</span></h2>',
+      `<h2 id="dashboard-greeting">${dynamicGreeting} <span>analyst.</span></h2>`
     );
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(rendered);
@@ -284,31 +425,33 @@ app.get('/', (req, res) => {
 });
 
 // GET /health
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
   const v2Path = path.join(__dirname, 'models', 'audio_deepfake_v2.keras');
   const v4Path = path.join(__dirname, 'models', 'audio_deepfake_v4.keras');
   const v2Exists = fs.existsSync(v2Path);
   const v4Exists = fs.existsSync(v4Path);
+  const mlStatus = await checkMLServiceHealth();
 
   res.json({
     status: 'online',
     tensorflow_available: true,
     keras_available: true,
     trained_models_loaded: v2Exists && v4Exists,
-    v2_loaded: v2Exists,
-    v4_loaded: v4Exists,
+    v2_loaded: v2Exists && (mlStatus ? mlStatus.v2_loaded : false),
+    v4_loaded: v4Exists && (mlStatus ? mlStatus.v4_loaded : false),
+    ml_service: mlStatus ? 'connected' : 'starting',
     models: {
       v2: {
         loaded: v2Exists,
         path: 'models/audio_deepfake_v2.keras',
         error: v2Exists ? null : 'Model file not found',
-        input_shape: '(None, 128, 65, 1)',
+        input_shape: mlStatus && mlStatus.v2_input_shape ? JSON.stringify(mlStatus.v2_input_shape) : '(None, 128, 65, 1)',
       },
       v4: {
         loaded: v4Exists,
         path: 'models/audio_deepfake_v4.keras',
         error: v4Exists ? null : 'Model file not found',
-        input_shape: '(None, 128, 65, 1)',
+        input_shape: mlStatus && mlStatus.v4_input_shape ? JSON.stringify(mlStatus.v4_input_shape) : '(None, 128, 65, 1)',
       },
     },
     audio_pipeline: {
@@ -409,7 +552,7 @@ function assessSecurity(modelScore, context, settings) {
 }
 
 // POST /predict
-app.post('/predict', upload.single('audio'), (req, res) => {
+app.post('/predict', upload.single('audio'), async (req, res) => {
   const started = Date.now();
   if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
     return res.status(400).json({
@@ -419,7 +562,7 @@ app.post('/predict', upload.single('audio'), (req, res) => {
   }
 
   const filename = req.file.originalname || 'recording.wav';
-  const ext = path.extname(filename).toLowerCase().replace('.', '');
+  const ext = path.extname(filename).toLowerCase().replace('.', '') || 'wav';
   const allowed = ['wav', 'mp3', 'm4a', 'aac', 'ogg', 'flac', 'webm', 'aiff', 'aif'];
   if (!allowed.includes(ext)) {
     return res.status(400).json({
@@ -470,43 +613,32 @@ app.post('/predict', upload.single('audio'), (req, res) => {
   }
   context.social_signals = Array.isArray(socialSignals) ? socialSignals : [];
 
-  // Inspect audio characteristics for realistic acoustic assessment
-  let duration = 3.2;
-  if (ext === 'wav' && buffer.length > 44 && buffer.toString('ascii', 0, 4) === 'RIFF') {
-    const byteRate = buffer.readUInt32LE(28) || 32000;
-    duration = Math.max(1.0, Math.min(120.0, (buffer.length - 44) / byteRate));
-  } else {
-    duration = Math.max(1.2, Math.min(60.0, buffer.length / 18000));
+  // Execute genuine model inference via trained V2 and V4 Keras models
+  let mlResult;
+  try {
+    mlResult = await callMLServicePredict(buffer, ext);
+  } catch (err) {
+    console.error('[ML Predict Error]', err);
+    return res.status(422).json({
+      success: false,
+      error: `INFERENCE FAILED: ${err.message}`,
+      audio_validation: {
+        valid: false,
+        message: err.message,
+      },
+    });
   }
-  duration = Math.round(duration * 100) / 100;
 
-  // Derive feature fingerprint from audio buffer
-  let sampleSum = 0;
-  let sampleSqSum = 0;
-  const step = Math.max(1, Math.floor(buffer.length / 2000));
-  let count = 0;
-  for (let i = 0; i < buffer.length; i += step) {
-    const val = (buffer[i] - 128) / 128.0;
-    sampleSum += Math.abs(val);
-    sampleSqSum += val * val;
-    count++;
-  }
-  const rms = count > 0 ? Math.sqrt(sampleSqSum / count) : 0.05;
-  const hash = crypto.createHash('sha256').update(buffer.slice(0, Math.min(buffer.length, 32768))).digest('hex');
-  const seed = parseInt(hash.slice(0, 8), 16) / 0xffffffff;
-
-  // Realistic deepfake score calculation based on acoustic variance & model calibration
-  // High-frequency artifact ratio simulation
-  const rawScoreBase = ((seed * 70) + (rms * 40)) % 100;
-  const v2Score = Math.max(4.2, Math.min(97.8, Math.round((rawScoreBase * 0.98 + 2.5) * 100) / 100));
-  const v4Score = Math.max(3.8, Math.min(98.5, Math.round((rawScoreBase * 1.02 - 1.8) * 100) / 100));
-  const ensembleScore = Math.round(((v2Score + v4Score) / 2) * 100) / 100;
+  const duration = mlResult.duration_seconds || 3.0;
+  const v2Score = mlResult.v2_score;
+  const v4Score = mlResult.v4_score;
+  const ensembleScore = mlResult.ensemble_score;
   const modelScore = ensembleScore;
 
-  const v2DeepfakeProb = Math.round((v2Score / 100) * 1000000) / 1000000;
-  const v2RealVoiceProb = Math.round((1 - v2DeepfakeProb) * 1000000) / 1000000;
-  const v4DeepfakeProb = Math.round((v4Score / 100) * 1000000) / 1000000;
-  const v4RealVoiceProb = Math.round((1 - v4DeepfakeProb) * 1000000) / 1000000;
+  const v2DeepfakeProb = mlResult.v2_deepfake_probability;
+  const v2RealVoiceProb = mlResult.v2_real_voice_probability;
+  const v4DeepfakeProb = mlResult.v4_deepfake_probability;
+  const v4RealVoiceProb = mlResult.v4_real_voice_probability;
 
   const settings = loadSettings();
   const security = assessSecurity(modelScore, context, settings);
@@ -517,26 +649,24 @@ app.post('/predict', upload.single('audio'), (req, res) => {
     ? `The ensemble classified this recording as likely AI-generated because the V2 deepfake score was ${v2Score.toFixed(1)}% and the V4 deepfake score was ${v4Score.toFixed(1)}%, giving a combined score of ${modelScore.toFixed(1)}%.`
     : `The ensemble classified this recording as likely genuine because the V2 deepfake score was ${v2Score.toFixed(1)}% and the V4 deepfake score was ${v4Score.toFixed(1)}%, giving a combined score of ${modelScore.toFixed(1)}%.`;
 
-  // Build timeline segments
-  const timeline = [];
-  const numSegments = Math.max(1, Math.ceil(duration / 1.5));
-  for (let i = 0; i < numSegments; i++) {
-    const startSec = Math.round(i * 1.0 * 100) / 100;
-    const endSec = Math.round(Math.min(startSec + 3.0, duration) * 100) / 100;
-    const segmentJitter = ((Math.sin(i + seed * 10) + 1) / 2) * 8 - 4;
-    const sScore = Math.max(1.0, Math.min(99.0, Math.round((ensembleScore + segmentJitter) * 100) / 100));
-    const sV2 = Math.max(1.0, Math.min(99.0, Math.round((v2Score + segmentJitter * 0.9) * 100) / 100));
-    const sV4 = Math.max(1.0, Math.min(99.0, Math.round((v4Score + segmentJitter * 1.1) * 100) / 100));
-    const sStatus = sScore >= Number(settings.high_threshold) ? 'HIGH' : sScore >= Number(settings.medium_threshold) ? 'ELEVATED' : 'CLEAR';
-    timeline.push({
-      start_seconds: startSec,
-      end_seconds: endSec,
-      v2_score: sV2,
-      v4_score: sV4,
-      ensemble_score: sScore,
+  // Map timeline segments with current settings threshold statuses
+  const timeline = (mlResult.timeline || []).map((seg) => {
+    const sScore = seg.ensemble_score;
+    const sStatus =
+      sScore >= Number(settings.high_threshold)
+        ? 'HIGH'
+        : sScore >= Number(settings.medium_threshold)
+        ? 'ELEVATED'
+        : 'CLEAR';
+    return {
+      start_seconds: seg.start_seconds,
+      end_seconds: seg.end_seconds,
+      v2_score: seg.v2_score,
+      v4_score: seg.v4_score,
+      ensemble_score: seg.ensemble_score,
       status: sStatus,
-    });
-  }
+    };
+  });
 
   const analysisId = `AN-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
   const activeSpeechSeconds = Math.round(Math.max(0.6, duration * 0.85) * 100) / 100;
@@ -585,7 +715,7 @@ app.post('/predict', upload.single('audio'), (req, res) => {
       active_speech_seconds: activeSpeechSeconds,
       duration_seconds: duration,
     },
-    processing_time_ms: Math.round((Date.now() - started + 45) * 100) / 100,
+    processing_time_ms: Math.round((Date.now() - started) * 100) / 100,
   };
 
   const audit = appendAudit('ANALYSIS_PERFORMED', {
@@ -703,6 +833,23 @@ app.post('/api/security-action', (req, res) => {
 });
 
 const PORT = 3000;
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`VoiceShield AI operations server running on http://0.0.0.0:${PORT}`);
+});
+
+function cleanupMLService() {
+  if (mlServiceProcess && !mlServiceProcess.killed) {
+    try {
+      mlServiceProcess.kill('SIGTERM');
+    } catch (_) {}
+  }
+}
+process.on('exit', cleanupMLService);
+process.on('SIGINT', () => {
+  cleanupMLService();
+  process.exit(0);
+});
+process.on('SIGTERM', () => {
+  cleanupMLService();
+  process.exit(0);
 });

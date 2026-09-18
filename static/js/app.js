@@ -47,10 +47,34 @@ function getFormattedCurrentTime(date = new Date()) {
   }).format(date);
 }
 
+function getGreeting(date = new Date()) {
+  const hour = parseInt(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: TIMEZONE,
+      hour: "numeric",
+      hourCycle: "h23",
+    }).format(date),
+    10
+  );
+
+  if (hour >= 5 && hour < 12) {
+    return "Good morning,";
+  } else if (hour >= 12 && hour < 17) {
+    return "Good afternoon,";
+  } else {
+    return "Good evening,";
+  }
+}
+
 function updateDashboardDateTime() {
   const dateEl = $("#dashboard-date") || $(".welcome-row .eyebrow");
   if (dateEl) {
     dateEl.textContent = getFormattedDashboardDate();
+  }
+  const greetingEl = $("#dashboard-greeting") || $(".welcome-row h2");
+  if (greetingEl) {
+    const greetingText = getGreeting();
+    greetingEl.innerHTML = `${greetingText} <span>analyst.</span>`;
   }
   const clockEls = $$(".current-time, #current-time, #dashboard-clock");
   if (clockEls.length > 0) {
