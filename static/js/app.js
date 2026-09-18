@@ -2581,6 +2581,241 @@ setInterval(
   1000
 );
 
+
+/*
+|--------------------------------------------------------------------------
+| ANALYSIS → EVALUATION
+|--------------------------------------------------------------------------
+| Adds an already-analyzed recording to the labeled evaluation dataset.
+| Ground truth must come from independent knowledge of the recording.
+*/
+
+function renderEvaluationAction() {
+  const resultPanel = $("#result-panel");
+
+  if (!resultPanel || !state.result) {
+    return;
+  }
+
+  let existing = $("#analysis-evaluation-action");
+
+  if (!existing) {
+    existing = document.createElement("section");
+
+    existing.id =
+      "analysis-evaluation-action";
+
+    existing.className =
+      "panel evaluation-action-panel";
+
+    resultPanel.appendChild(existing);
+  }
+
+  const result =
+    state.result;
+
+  const alreadyAdded =
+    state.evaluationSamples?.some(
+      (sample) =>
+        sample.analysis_id ===
+        result.analysis_id
+    );
+
+  existing.innerHTML = `
+    <div class="panel-heading">
+      <div>
+        <p class="eyebrow">
+          MODEL VALIDATION
+        </p>
+
+        <h3>
+          Add this analysis to evaluation
+        </h3>
+      </div>
+
+      <span class="mono muted">
+        GROUND TRUTH REQUIRED
+      </span>
+    </div>
+
+    <p class="muted evaluation-note">
+      Only add this recording when you independently know whether
+      the audio is REAL or FAKE. Do not use VoiceShield's prediction
+      as the ground truth.
+    </p>
+
+    <div class="field-grid">
+      <label>
+        <span>
+          Actual recording class
+        </span>
+
+        <select
+          id="analysis-ground-truth"
+          ${alreadyAdded ? "disabled" : ""}
+        >
+          <option value="REAL">
+            REAL
+          </option>
+
+          <option value="FAKE">
+            FAKE
+          </option>
+        </select>
+      </label>
+
+      <label>
+        <span>
+          Model score
+        </span>
+
+        <input
+          type="text"
+          value="${Number(
+            result.model_score
+          ).toFixed(1)}/100"
+          disabled
+        >
+      </label>
+    </div>
+
+    <div
+      style="
+        display:flex;
+        gap:12px;
+        align-items:center;
+        margin-top:16px;
+        flex-wrap:wrap;
+      "
+    >
+      <button
+        id="add-analysis-to-evaluation"
+        class="primary-button compact"
+        type="button"
+        ${alreadyAdded ? "disabled" : ""}
+      >
+        ${
+          alreadyAdded
+            ? "Already added ✓"
+            : "Add to evaluation"
+        }
+      </button>
+
+      <span
+        id="analysis-evaluation-status"
+        class="muted"
+      ></span>
+    </div>
+  `;
+
+  const button =
+    $("#add-analysis-to-evaluation");
+
+  if (!button || alreadyAdded) {
+    return;
+  }
+
+  button.addEventListener(
+    "click",
+    async () => {
+      const groundTruth =
+        $("#analysis-ground-truth")
+          ?.value;
+
+      if (
+        groundTruth !== "REAL" &&
+        groundTruth !== "FAKE"
+      ) {
+        return;
+      }
+
+      button.disabled = true;
+
+      button.textContent =
+        "Adding…";
+
+      const status =
+        $("#analysis-evaluation-status");
+
+      if (status) {
+        status.textContent =
+          "Saving labeled evaluation sample…";
+      }
+
+      try {
+        const data =
+          await api(
+            "/api/evaluation/from-analysis",
+            {
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
+
+              body: JSON.stringify({
+                expected_label:
+                  groundTruth,
+
+                model_score:
+                  Number(
+                    result.model_score
+                  ),
+
+                analysis_id:
+                  result.analysis_id,
+
+                filename:
+                  result.filename,
+
+                source:
+                  "analysis_result",
+
+                notes:
+                  "Added directly from a completed VoiceShield analysis.",
+              }),
+            }
+          );
+
+        button.textContent =
+          "Added to evaluation ✓";
+
+        const select =
+          $("#analysis-ground-truth");
+
+        if (select) {
+          select.disabled =
+            true;
+        }
+
+        if (status) {
+          status.textContent =
+            `Stored as ${groundTruth}. Detector prediction: ${
+              data.sample
+                ?.predicted_label ||
+              "—"
+            }.`;
+        }
+
+        await loadEvaluation();
+
+      } catch (error) {
+        button.disabled = false;
+
+        button.textContent =
+          "Add to evaluation";
+
+        if (status) {
+          status.textContent =
+            error.message;
+        }
+      }
+    }
+  );
+}
+
+
 loadHealth();
 loadEvents();
 loadIncidents();
