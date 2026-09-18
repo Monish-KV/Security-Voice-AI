@@ -1070,9 +1070,12 @@ def send_json(
     )
 
 
-def read_json_body(
+def read_request_body(
     handler: BaseHTTPRequestHandler,
-) -> dict[str, Any]:
+) -> bytes:
+    """
+    Read the full request body based on Content-Length.
+    """
 
     content_length = int(
         handler.headers.get(
@@ -1086,31 +1089,92 @@ def read_json_body(
             "Request body is empty."
         )
 
-    body = handler.rfile.read(
+    return handler.rfile.read(
         content_length
     )
 
-    try:
-        payload = json.loads(
-            body.decode(
-                "utf-8"
+
+def extract_audio_bytes(
+    handler: BaseHTTPRequestHandler,
+    body: bytes,
+) -> bytes:
+    """
+    Extract raw audio bytes from the request.
+
+    Two transport formats are supported so the ML service
+    stays compatible with any Node client version:
+
+    1. Raw binary upload
+       Content-Type: application/octet-stream (or anything
+       that is not JSON). The body IS the audio container.
+
+    2. JSON envelope
+       Content-Type: application/json with an "audio_base64"
+       field (optionally a data-URL prefix).
+
+    This function never fabricates audio. If neither format
+    yields usable bytes it raises ValueError so the caller
+    returns a clear, JSON-formatted failure.
+    """
+
+    content_type = (
+        handler.headers.get(
+            "Content-Type",
+            "",
+        )
+        or ""
+    ).lower()
+
+    # JSON envelope with base64 audio.
+    if "application/json" in content_type:
+        try:
+            payload = json.loads(
+                body.decode("utf-8")
             )
-        )
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(
+                f"Invalid JSON body: {error}"
+            )
 
-    except json.JSONDecodeError as error:
+        if not isinstance(payload, dict):
+            raise ValueError(
+                "Request JSON must be an object."
+            )
+
+        audio_base64 = payload.get("audio_base64")
+
+        if (
+            not isinstance(audio_base64, str)
+            or not audio_base64.strip()
+        ):
+            raise ValueError(
+                "audio_base64 is required."
+            )
+
+        # Support an optional data-URL prefix.
+        if "," in audio_base64:
+            prefix, encoded_data = audio_base64.split(",", 1)
+
+            if prefix.startswith("data:"):
+                audio_base64 = encoded_data
+
+        try:
+            return base64.b64decode(
+                audio_base64,
+                validate=True,
+            )
+        except Exception as error:
+            raise ValueError(
+                f"Invalid base64 audio: {error}"
+            )
+
+    # Raw binary upload (Node sends application/octet-stream).
+    if not body:
         raise ValueError(
-            f"Invalid JSON body: {error}"
+            "Audio payload is empty."
         )
 
-    if not isinstance(
-        payload,
-        dict,
-    ):
-        raise ValueError(
-            "Request JSON must be an object."
-        )
-
-    return payload
+    return body
 
 
 # ---------------------------------------------------------------------------
@@ -1226,49 +1290,24 @@ class MLRequestHandler(
             return
 
         try:
-            payload = read_json_body(
-                self
+            body = read_request_body(self)
+
+            audio_ext = (
+                self.headers.get("X-Audio-Ext", "")
+                or "unknown"
             )
 
-            audio_base64 = payload.get(
-                "audio_base64"
+            print(
+                f"[ML] /predict received {len(body)} bytes "
+                f"(ext={audio_ext}, "
+                f"content-type={self.headers.get('Content-Type', 'n/a')}).",
+                flush=True,
             )
 
-            if not isinstance(
-                audio_base64,
-                str,
-            ) or not audio_base64.strip():
-
-                raise ValueError(
-                    "audio_base64 is required."
-                )
-
-            # Support a possible data-URL prefix.
-            if "," in audio_base64:
-                prefix, encoded_data = (
-                    audio_base64.split(
-                        ",",
-                        1,
-                    )
-                )
-
-                if prefix.startswith(
-                    "data:"
-                ):
-                    audio_base64 = (
-                        encoded_data
-                    )
-
-            try:
-                audio_bytes = base64.b64decode(
-                    audio_base64,
-                    validate=True,
-                )
-
-            except Exception as error:
-                raise ValueError(
-                    f"Invalid base64 audio: {error}"
-                )
+            audio_bytes = extract_audio_bytes(
+                self,
+                body,
+            )
 
             result = analyze_audio(
                 audio_bytes
