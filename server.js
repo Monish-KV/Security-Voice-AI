@@ -1400,7 +1400,9 @@ app.post(
         : `The ensemble classified this recording as likely genuine because the V2 deepfake score was ${v2Score.toFixed(1)}% and the V4 deepfake score was ${v4Score.toFixed(1)}%, giving a combined score of ${modelScore.toFixed(1)}%.`;
 
     const timeline =
-      (mlResult.timeline || []).map(
+      (mlResult.windows ||
+        mlResult.timeline ||
+        []).map(
         (seg) => {
           const sScore =
             Number(
