@@ -113,64 +113,8 @@ async function ensureMLService() {
   isStartingMLService = true;
 
   const scriptPath = path.join(__dirname, 'ml_service.py');
-  const requirementsPath = path.join(
-    __dirname,
-    'requirements.txt'
-  );
 
   try {
-    /*
-     * AI Studio provides Python but may not provide pip initially.
-     *
-     * The package.json postinstall bootstraps pip.
-     * Here we explicitly make sure the Python ML dependencies
-     * are installed before starting ml_service.py.
-     */
-    if (fs.existsSync(requirementsPath)) {
-      console.log(
-        '[ML Service] Checking Python dependencies...'
-      );
-
-      const installProcess = spawn(
-        'python3',
-        [
-          '-m',
-          'pip',
-          'install',
-          '--user',
-          '--disable-pip-version-check',
-          '--no-cache-dir',
-          '-r',
-          requirementsPath,
-        ],
-        {
-          stdio: ['ignore', 'inherit', 'inherit'],
-          detached: false,
-        }
-      );
-
-      await new Promise((resolve, reject) => {
-        installProcess.on('error', reject);
-
-        installProcess.on('exit', (code, signal) => {
-          if (code === 0) {
-            resolve();
-            return;
-          }
-
-          reject(
-            new Error(
-              `Python dependency installation failed (code=${code}, signal=${signal}).`
-            )
-          );
-        });
-      });
-
-      console.log(
-        '[ML Service] Python dependencies are installed.'
-      );
-    }
-
     if (!fs.existsSync(scriptPath)) {
       throw new Error(
         'ml_service.py was not found.'
@@ -226,8 +170,6 @@ async function ensureMLService() {
 
   isStartingMLService = false;
 }
-
-ensureMLService();
 
 async function callMLServicePredict(audioBuffer, ext) {
   await ensureMLService();
