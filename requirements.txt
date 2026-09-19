@@ -1,0 +1,6 @@
+numpy
+scipy
+librosa
+soundfile
+tensorflow==2.20.0
+keras==3.12.4
