@@ -95,53 +95,103 @@ function checkMLServiceHealth() {
   });
 }
 
+let mlServiceStartupPromise = null;
+
 async function ensureMLService() {
-  if (isStartingMLService) {
-    return;
-  }
-
   if (mlServiceProcess && !mlServiceProcess.killed) {
-    return;
+    const health = await checkMLServiceHealth();
+
+    if (health && health.status === 'online') {
+      return health;
+    }
   }
 
-  const health = await checkMLServiceHealth();
-
-  if (health && health.status === 'online') {
-    return;
+  if (mlServiceStartupPromise) {
+    return mlServiceStartupPromise;
   }
 
-  isStartingMLService = true;
+  mlServiceStartupPromise = new Promise(async (resolve, reject) => {
+    try {
+      const existingHealth = await checkMLServiceHealth();
 
-  const scriptPath = path.join(__dirname, 'ml_service.py');
-
-  if (fs.existsSync(scriptPath)) {
-    mlServiceProcess = spawn(
-      'python3',
-      [scriptPath, String(ML_SERVICE_PORT)],
-      {
-        stdio: ['ignore', 'inherit', 'inherit'],
-        detached: false,
+      if (existingHealth && existingHealth.status === 'online') {
+        resolve(existingHealth);
+        return;
       }
-    );
 
-    mlServiceProcess.on('exit', (code, signal) => {
-      console.log(
-        `[ML Service] Process exited (code: ${code}, signal: ${signal}).`
+      const scriptPath = path.join(__dirname, 'ml_service.py');
+
+      if (!fs.existsSync(scriptPath)) {
+        throw new Error(`ML service script not found: ${scriptPath}`);
+      }
+
+      console.log('[ML Service] Starting Python inference engine...');
+
+      mlServiceProcess = spawn(
+        'python3',
+        [scriptPath, String(ML_SERVICE_PORT)],
+        {
+          stdio: ['ignore', 'inherit', 'inherit'],
+          detached: false,
+        }
       );
 
-      mlServiceProcess = null;
-      isStartingMLService = false;
-    });
+      mlServiceProcess.on('exit', (code, signal) => {
+        console.log(
+          `[ML Service] Process exited (code: ${code}, signal: ${signal}).`
+        );
 
-    console.log(
-      `[ML Service] Spawned python inference engine on port ${ML_SERVICE_PORT}`
-    );
-  }
+        mlServiceProcess = null;
+      });
 
-  isStartingMLService = false;
+      mlServiceProcess.on('error', (error) => {
+        console.error(
+          '[ML Service] Failed to start Python process:',
+          error
+        );
+      });
+
+      const maxAttempts = 60;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        await new Promise((r) => setTimeout(r, 1000));
+
+        const health = await checkMLServiceHealth();
+
+        if (health && health.status === 'online') {
+          console.log(
+            `[ML Service] Ready after ${attempt} second(s).`
+          );
+
+          resolve(health);
+          return;
+        }
+
+        if (attempt % 5 === 0) {
+          console.log(
+            `[ML Service] Still starting... ${attempt}/${maxAttempts}s`
+          );
+        }
+
+        if (!mlServiceProcess || mlServiceProcess.killed) {
+          throw new Error(
+            'ML service process exited before becoming ready.'
+          );
+        }
+      }
+
+      throw new Error(
+        'ML service did not become ready within 60 seconds.'
+      );
+    } catch (error) {
+      reject(error);
+    } finally {
+      mlServiceStartupPromise = null;
+    }
+  });
+
+  return mlServiceStartupPromise;
 }
-
-ensureMLService();
 
 async function callMLServicePredict(audioBuffer, ext) {
   await ensureMLService();
