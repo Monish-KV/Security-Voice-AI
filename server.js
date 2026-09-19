@@ -114,17 +114,7 @@ async function ensureMLService() {
 
   const scriptPath = path.join(__dirname, 'ml_service.py');
 
-  try {
-    if (!fs.existsSync(scriptPath)) {
-      throw new Error(
-        'ml_service.py was not found.'
-      );
-    }
-
-    console.log(
-      '[ML Service] Starting trained-model inference engine...'
-    );
-
+  if (fs.existsSync(scriptPath)) {
     mlServiceProcess = spawn(
       'python3',
       [scriptPath, String(ML_SERVICE_PORT)],
@@ -133,16 +123,6 @@ async function ensureMLService() {
         detached: false,
       }
     );
-
-    mlServiceProcess.on('error', (err) => {
-      console.error(
-        '[ML Service] Failed to start:',
-        err
-      );
-
-      mlServiceProcess = null;
-      isStartingMLService = false;
-    });
 
     mlServiceProcess.on('exit', (code, signal) => {
       console.log(
@@ -156,16 +136,6 @@ async function ensureMLService() {
     console.log(
       `[ML Service] Spawned python inference engine on port ${ML_SERVICE_PORT}`
     );
-  } catch (err) {
-    console.error(
-      '[ML Service] Startup failed:',
-      err
-    );
-
-    mlServiceProcess = null;
-    isStartingMLService = false;
-
-    throw err;
   }
 
   isStartingMLService = false;
