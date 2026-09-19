@@ -141,6 +141,8 @@ async function ensureMLService() {
   isStartingMLService = false;
 }
 
+ensureMLService();
+
 async function callMLServicePredict(audioBuffer, ext) {
   await ensureMLService();
 

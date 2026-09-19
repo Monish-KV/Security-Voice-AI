@@ -1,0 +1,48 @@
+There is a real end-to-end bug in the current VoiceShield AI analysis flow.
+
+I uploaded a real .ogg voice recording and clicked “Analyze recording”. The UI completed the analysis but displayed:
+
+- Ensemble risk score: NaN
+- V2 prediction: NaN%
+- V4 prediction: NaN%
+- Duration: undefined
+- Processing: undefined
+
+The trained V2 and V4 models are already confirmed to exist, load successfully, and use input shape (None, 128, 65, 1). Do NOT replace or modify the trained models.
+
+DEBUG AND FIX THIS END-TO-END. Do not just hide the NaN values.
+
+1. Inspect the actual POST /predict request made by the frontend.
+2. Inspect the actual JSON response returned by the backend for the uploaded .ogg file.
+3. Verify audio decoding and preprocessing actually succeeds.
+4. Verify model.predict() returns numeric values for BOTH V2 and V4.
+5. Verify the model output tensor is converted to a finite Python float correctly.
+6. Preserve the verified model semantics: the models output REAL-VOICE probability, so deepfake probability = 1 - real_voice_probability.
+7. Verify the ensemble calculation uses two finite numeric deepfake probabilities.
+8. Verify duration and processing time are actually included in the API response.
+9. Inspect the frontend code and make sure it reads the EXACT field names returned by /predict.
+10. Fix any backend/frontend field-name mismatch, NaN conversion, undefined value, or response-shape problem you find.
+11. Add explicit validation: if V2, V4, ensemble, duration, or processing is not finite, return a clear error instead of displaying NaN.
+12. Test the complete flow again using the real uploaded audio if it is still available.
+
+IMPORTANT:
+- Do NOT use fake values.
+- Do NOT use random values.
+- Do NOT add heuristic fallback detection.
+- Do NOT bypass model.predict().
+- Do NOT change the trained models.
+- Do NOT simply replace NaN with 0.
+- Do NOT tell me the problem is caused by the lack of an audio file; I DID upload and analyze a real .ogg recording.
+- Do NOT rebuild unrelated features.
+
+At the end, report:
+A. The exact root cause of the NaN/undefined result.
+B. What files/code were changed.
+C. V2 real-voice probability.
+D. V2 deepfake probability.
+E. V4 real-voice probability.
+F. V4 deepfake probability.
+G. 50/50 ensemble deepfake probability.
+H. Duration.
+I. Processing time.
+J. Confirmation that these values came from actual TensorFlow/Keras model.predict() inference.
