@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "build": "python3 -m pip install -r requirements.txt && node -e \"console.log('VoiceShield build completed')\"",
-    "postinstall": "python3 -m pip install -r requirements.txt",
-    "lint": "node --check server.js"
+    "build": "node -e \"console.log('VoiceShield build completed')\"",
+    "lint": "node --check server.js",
+    "postinstall": "python3 -m ensurepip --upgrade || python3 -c \"import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '/tmp/get-pip.py')\" && python3 /tmp/get-pip.py --user; python3 -m pip install --user -r requirements.txt"
   },
   "dependencies": {
     "@google/genai": "^2.23.0",
